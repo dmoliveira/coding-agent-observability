@@ -7,6 +7,7 @@ import os
 import re
 import stat
 import subprocess
+import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -153,11 +154,68 @@ def compose_command(config: dict[str, str], *args: str) -> list[str]:
     ]
 
 
-def compose_environment(config: dict[str, str]) -> dict[str, str]:
+def bitwarden_password(config: dict[str, str]) -> str | None:
+    """Resolve an optional bootstrap password without displaying vault output."""
+    item = os.environ.get("AI_OBSERVATORY_BITWARDEN_ITEM")
+    if not item:
+        return None
+
+    try:
+        if not re.fullmatch(
+            r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+            r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+            item,
+        ):
+            raise ValueError("Invalid item ID")
+        result = subprocess.run(
+            ["bw", "get", "password", item, "--nointeraction"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=True,
+            timeout=15,
+        )
+        password = result.stdout
+        if password.endswith("\r\n"):
+            password = password[:-2]
+        elif password.endswith("\n"):
+            password = password[:-1]
+        if not re.fullmatch(r"[A-Za-z0-9_-]{16,}", password):
+            raise ValueError("Invalid password format")
+    except (OSError, subprocess.SubprocessError, ValueError):
+        print(
+            "Bitwarden lookup unavailable or invalid; using .env fallback. "
+            "Check the CLI session, item ID and password format.",
+            file=sys.stderr,
+        )
+        return None
+
+    if password != config["ADMIN_PASSWORD"]:
+        print(
+            "Bitwarden password differs from .env; existing Langfuse logins "
+            "are not changed by startup.",
+            file=sys.stderr,
+        )
+    print("Using Bitwarden administrator password for initialization.", file=sys.stderr)
+    return password
+
+
+def compose_environment(
+    config: dict[str, str], *, admin_password: str | None = None
+) -> dict[str, str]:
     # Compose otherwise gives inherited shell variables priority over our .env.
     env = os.environ.copy()
     for key in (*config, "COMPOSE_FILE", "COMPOSE_ENV_FILES", "COMPOSE_PROFILES"):
         env.pop(key, None)
+    for key in tuple(env):
+        if key.startswith(("BW_", "BWS_", "BITWARDENCLI_")) or key in (
+            "AI_OBSERVATORY_ADMIN_PASSWORD",
+            "AI_OBSERVATORY_BITWARDEN_ITEM",
+        ):
+            env.pop(key)
+    if admin_password is not None:
+        env["ADMIN_PASSWORD"] = admin_password
     return env
 
 
@@ -165,6 +223,7 @@ def run_compose(
     config: dict[str, str], *args: str, **kwargs: object
 ) -> subprocess.CompletedProcess:
     marker = ROOT / ".ai-observatory.starting"
+    admin_password = None
     if args and args[0] == "up":
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
         if hasattr(os, "O_NOFOLLOW"):
@@ -176,9 +235,10 @@ def run_compose(
                 "A previous startup did not complete; run make down before retrying."
             ) from None
         os.close(fd)
+        admin_password = bitwarden_password(config)
     result = subprocess.run(
         compose_command(config, *args),
-        env=compose_environment(config),
+        env=compose_environment(config, admin_password=admin_password),
         check=True,
         pass_fds=maintenance_fds(),
         **kwargs,

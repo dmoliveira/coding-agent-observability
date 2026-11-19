@@ -38,6 +38,56 @@ make up                  # start again with the same data
 
 Keep `.env` private and backed up: it includes your administrator password and the keys needed to read stored data. Docker administrators and other users with sufficient host access can also access container data.
 
+### Optional: Bitwarden administrator password
+
+The [Bitwarden CLI](https://bitwarden.com/help/cli/) can supply the administrator
+password during startup. Store the existing Langfuse login in Bitwarden first;
+the original password is in `ADMIN_PASSWORD` in `.env` unless it was changed in
+Langfuse. Do not print or paste passwords or session keys into an agent session.
+
+In your own terminal, with shell tracing (`set -x`) disabled, authenticate and
+unlock the CLI separately from the browser extension. These commands capture the
+session key instead of printing it:
+
+```sh
+export BW_SESSION="$(bw login --raw)"  # first CLI login
+# OR, if already logged in but locked:
+export BW_SESSION="$(bw unlock --raw)"
+```
+
+Sync the CLI, then find the login's ID without displaying its password; replace
+the search text with the name you used in Bitwarden. The command lists only
+login item IDs and names:
+
+```sh
+bw sync
+bw list items --search "AI Observatory" | python3 -c 'import json,sys; [print(i["id"], i["name"]) for i in json.load(sys.stdin) if i.get("type") == 1]'
+```
+
+Select the correct ID and start the stack in the same terminal:
+
+```sh
+export AI_OBSERVATORY_BITWARDEN_ITEM="<login-item-id>"
+make up
+```
+
+The item password must have at least 16 letters, digits, underscores or hyphens,
+matching the setup rules. If the CLI is missing, locked, times out, the ID is
+invalid, or the password does not meet those rules, startup warns and uses the
+existing `.env` value instead. On success it confirms the source without printing
+the password. A different valid Bitwarden password is used with a warning; it
+does **not** change an existing Langfuse login. Initialization only creates the
+account if it does not already exist. Change an existing login in Langfuse itself,
+not by editing Bitwarden or `.env`. Changing the startup value can cause Compose
+to recreate the web container; its data volumes are preserved.
+
+Keep `.env` private, unchanged and backed up: it remains required and still
+contains plaintext secrets. The CLI session is not passed to Docker, but Docker
+administrators can inspect container configuration. A new shell needs its own
+unlocked CLI session and item selection; run `unset BW_SESSION` when finished.
+You can save the non-secret item ID in your shell profile, but never save the
+session key or master password there.
+
 ## 🧩 Trace OpenCode by default
 
 Install OpenCode 2 and Node.js 22+ on the machine running OpenCode. From a terminal, run once:
