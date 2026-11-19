@@ -1,0 +1,19 @@
+{
+  "name": "ai-observatory-opencode-global",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@langfuse/opencode-observability-plugin": "0.7.0"
+  },
+  "scripts": {
+    "prepare-instrumentation": "node prepare.js",
+    "test": "node --test test/*.test.js"
+  }
+}

@@ -251,6 +251,9 @@ def main(action: str) -> None:
         )
         env = os.environ.copy()
         env.update(values)
+        # This legacy launcher runs the project-specific official plugin; avoid
+        # also loading the default-on global adapter in the same process.
+        env["AI_OBSERVATORY_DISABLED"] = "1"
         os.chdir(project)
         os.execvpe("opencode", ["opencode", "--standalone"], env)
     else:
