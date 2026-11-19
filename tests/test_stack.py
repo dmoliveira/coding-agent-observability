@@ -9,8 +9,9 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from integrations import tailscale
 from stack import manage
+
+from integrations import tailscale
 
 
 class StackTests(unittest.TestCase):

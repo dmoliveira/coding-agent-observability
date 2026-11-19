@@ -92,6 +92,21 @@ class OpenCodeTests(unittest.TestCase):
             opencode.has_plugin_gate(opencode.project_configs(config.parent))
         )
 
+    def test_project_launcher_disables_global_adapter_to_avoid_duplicates(self) -> None:
+        with mock.patch.object(opencode, "verify_key"):
+            opencode.connect(self.project)
+        with (
+            mock.patch.object(opencode, "project_path", return_value=self.project),
+            mock.patch.object(opencode, "verify_key"),
+            mock.patch.object(opencode.os, "chdir"),
+            mock.patch.object(opencode.os, "execvpe") as execute,
+        ):
+            opencode.main("run")
+        command, args, environment = execute.call_args.args
+        self.assertEqual(command, "opencode")
+        self.assertIn("--standalone", args)
+        self.assertEqual(environment["AI_OBSERVATORY_DISABLED"], "1")
+
 
 if __name__ == "__main__":
     unittest.main()

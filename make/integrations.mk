@@ -1,4 +1,7 @@
-.PHONY: connect-opencode run-opencode env-opencode tailscale-on tailscale-off
+.PHONY: connect-opencode-global connect-opencode run-opencode env-opencode tailscale-on tailscale-off
+
+connect-opencode-global: ## Enable default-on OpenCode tracing for this user
+	@$(PYTHON) scripts/integrations/opencode_global.py
 
 export PROJECT
 connect-opencode: ## Enable the official OpenCode plugin for PROJECT=/path
