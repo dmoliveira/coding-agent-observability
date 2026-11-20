@@ -110,6 +110,31 @@ AI_OBSERVATORY_DISABLED=1 opencode --standalone
 
 The standalone flag is important: a normal client connects to the already-running shared service, whose environment it cannot change. Other plugins and telemetry exporters are independent and may still record data. Existing traces are not erased. See the [integration guide](docs/opencode.md) for coverage, limitations, and the older per-project launcher.
 
+## 🧪 Evaluate with local LM Studio models
+
+On **macOS with a local Docker Desktop or OrbStack engine**, install LM Studio 0.4.0 or newer and its `lms` CLI. Remote Docker engines are not supported. Downloaded models and their licenses are managed in LM Studio. This integration does not download models or start its server for you.
+
+1. In LM Studio's Developer settings, run the API on **`127.0.0.1:1234`**. Keep **Serve on Local Network** and **LM Link** off. Enable **Require Authentication** and create a token for stronger protection. Enable **Just in Time Model Loading** to make downloaded models available on demand, or load the ones you need manually.
+2. Start Langfuse, then connect and inspect the available models:
+
+   ```sh
+   make up
+   make lmstudio-models       # list downloaded models, including embeddings
+   make connect-lmstudio      # enable gateway and add available language models
+   make sync-lmstudio-models  # add newly available language models later
+   ```
+
+   Connecting may briefly recreate only the Langfuse web and worker containers; it does not remove volumes or change `.env`. The command reuses the private global OpenCode project key only when it points to this local server; otherwise it prompts for a project-scoped Langfuse key in a terminal. If LM Studio authentication is enabled, it prompts for that token without echoing it. Alternatively, provide `AI_OBSERVATORY_LM_STUDIO_TOKEN` privately in the environment; do not put tokens in command history. The LM Studio token is stored encrypted by Langfuse, not by the script.
+3. In **Project Settings → LLM Connections**, find the printed `ai-observatory-lmstudio-…` provider. In **Evaluators**, create an LLM-as-a-Judge evaluator and select that provider and a model. Test synthetic examples first and compare its scores with human-labeled cases before trusting them. A model's presence in the list is not proof of structured-output support or evaluation quality.
+
+Sync is **add-only**: it never removes previously registered model IDs, changes the project default, or edits another connection. It adds only language-model IDs currently advertised by LM Studio's OpenAI API; embeddings are listed but not used as judges. If JIT is off, unloaded models may not be advertised. The script stops rather than overwrite its connection if it detects external edits. Langfuse's API has no conditional update, so avoid editing that connection in the UI while sync is running.
+
+The opt-in adds a non-published gateway to the Compose network. Langfuse trusts only that gateway's hostname, and the gateway forwards only model-list and chat-completion requests to the fixed local LM Studio port. LM Studio authentication is off by default: without it, other local users and Docker workloads may access its API. The host-to-container connection uses local HTTP, not encryption. Models, prompts, trace inputs, and outputs may still be accessible to local administrators; LM Link or external integrations can move data off the Mac. See [security and privacy](docs/security.md).
+
+The integration marker and connection-ownership state are private, ignored local files and are **not included in the existing backup archive**. After restoring to a fresh checkout, run `make connect-lmstudio` again; it creates a new managed connection without overwriting the restored one. Do not delete the marker while the gateway is running. If LM Studio is stopped, evaluations may fail or pause; restart the server and check the evaluator before resuming.
+
+If setup reports that an interrupted operation may have created a connection, inspect the managed provider in Langfuse before retrying. To start a fresh managed connection without altering the old one, stop other observatory commands, move `.ai-observatory.lmstudio-state.json` to a different private filename outside the repository, and run `make connect-lmstudio` again. Existing evaluators continue to refer to the old connection until you explicitly change them. If a container startup fails, follow the existing `make down` / `make up` recovery instructions; these commands preserve the named volumes.
+
 ## 🔐 Share with another Tailscale machine
 
 On the **server**, connect Tailscale, enable MagicDNS and HTTPS certificates in your tailnet, and review the tailnet's ACLs or grants for ports `15443` and `15444`. Start the stack, then explicitly enable sharing:

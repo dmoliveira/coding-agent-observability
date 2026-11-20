@@ -1,4 +1,4 @@
-.PHONY: connect-opencode-global connect-opencode run-opencode env-opencode tailscale-on tailscale-off
+.PHONY: connect-opencode-global connect-opencode run-opencode env-opencode tailscale-on tailscale-off lmstudio-models connect-lmstudio sync-lmstudio-models
 
 connect-opencode-global: ## Enable default-on OpenCode tracing for this user
 	@$(PYTHON) scripts/integrations/opencode_global.py
@@ -18,3 +18,12 @@ tailscale-on: ## Enable private Tailscale HTTPS access on dedicated ports
 
 tailscale-off: ## Disable only this instance's Tailscale routes
 	@$(PYTHON) scripts/integrations/tailscale.py off
+
+lmstudio-models: ## List downloaded LM Studio models and loaded status
+	@$(PYTHON) scripts/integrations/lmstudio.py models
+
+connect-lmstudio: ## Connect local LM Studio and add its available language models
+	@$(PYTHON) scripts/integrations/lmstudio.py connect
+
+sync-lmstudio-models: ## Add newly available LM Studio models to the managed connection
+	@$(PYTHON) scripts/integrations/lmstudio.py sync

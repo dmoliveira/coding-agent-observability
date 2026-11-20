@@ -1,0 +1,26 @@
+# Included only after an explicit `make connect-lmstudio` in this checkout.
+services:
+  web:
+    environment:
+      LANGFUSE_LLM_CONNECTION_WHITELISTED_HOST: lmstudio-gateway
+  worker:
+    environment:
+      LANGFUSE_LLM_CONNECTION_WHITELISTED_HOST: lmstudio-gateway
+  lmstudio-gateway:
+    # Reuse the installed Langfuse image; only the standalone Node proxy runs.
+    image: docker.io/langfuse/langfuse:4.82.0
+    entrypoint: ["node", "/opt/ai-observatory/lmstudio-gateway.cjs"]
+    command: []
+    user: "1001"
+    restart: unless-stopped
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - ./integrations/lmstudio/gateway.cjs:/opt/ai-observatory/lmstudio-gateway.cjs:ro
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('node:http').get('http://127.0.0.1:8787/healthz', r => { r.resume(); r.on('end', () => process.exit(r.statusCode === 204 ? 0 : 1)); }).on('error', () => process.exit(1));"]
+      interval: 5s
+      timeout: 4s
+      retries: 12
+      start_period: 10s

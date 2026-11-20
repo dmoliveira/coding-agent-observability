@@ -101,6 +101,11 @@ class ComposeTests(InitializeTests):
             text=True,
         )
         rendered = json.loads(result.stdout)
+        self.assertNotIn("lmstudio-gateway", rendered["services"])
+        self.assertNotIn(
+            "LANGFUSE_LLM_CONNECTION_WHITELISTED_HOST",
+            rendered["services"]["web"]["environment"],
+        )
         published = {
             name: service["ports"]
             for name, service in rendered["services"].items()
@@ -120,6 +125,51 @@ class ComposeTests(InitializeTests):
         self.assertEqual(
             rendered["services"]["web"]["environment"]["TELEMETRY_ENABLED"], "false"
         )
+
+    def test_opt_in_lmstudio_overlay_preserves_named_volumes_and_limits_access(
+        self,
+    ) -> None:
+        initialize.initialize()
+        config = load_config(self.path)
+        env = os.environ.copy()
+        for key in (*config, "COMPOSE_FILE", "COMPOSE_ENV_FILES", "COMPOSE_PROFILES"):
+            env.pop(key, None)
+        result = subprocess.run(
+            [
+                "docker",
+                "compose",
+                "--env-file",
+                str(self.path),
+                "-f",
+                str(ROOT / "compose.yaml"),
+                "-f",
+                str(ROOT / "compose.lmstudio.yaml"),
+                "config",
+                "--format",
+                "json",
+            ],
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        services = json.loads(result.stdout)["services"]
+        for name in ("web", "worker"):
+            self.assertEqual(
+                services[name]["environment"][
+                    "LANGFUSE_LLM_CONNECTION_WHITELISTED_HOST"
+                ],
+                "lmstudio-gateway",
+            )
+        gateway = services["lmstudio-gateway"]
+        self.assertFalse(gateway.get("ports"))
+        self.assertTrue(gateway["read_only"])
+        self.assertEqual(gateway["cap_drop"], ["ALL"])
+        self.assertTrue(gateway["volumes"][0]["read_only"])
+        for name in ("postgres", "clickhouse", "redis", "minio"):
+            self.assertTrue(
+                all(v["type"] == "volume" for v in services[name]["volumes"])
+            )
 
 
 if __name__ == "__main__":
