@@ -1,4 +1,4 @@
-.PHONY: connect-opencode-global connect-opencode run-opencode env-opencode tailscale-on tailscale-off lmstudio-models connect-lmstudio sync-lmstudio-models span-dashboard span-dashboard-demo
+.PHONY: connect-opencode-global connect-opencode run-opencode env-opencode tailscale-on tailscale-off lmstudio-models connect-lmstudio sync-lmstudio-models span-dashboard span-dashboard-demo agent-dashboards agent-report agent-eval-demo
 
 connect-opencode-global: ## Enable default-on OpenCode tracing for this user
 	@$(PYTHON) scripts/integrations/opencode_global.py
@@ -33,3 +33,12 @@ span-dashboard: ## Create or update the local span-classification dashboard
 
 span-dashboard-demo: ## Send three explicitly marked synthetic spans for classification
 	@$(PYTHON) scripts/integrations/span_dashboard.py demo
+
+agent-dashboards: ## Create or update measured OpenCode and project-tool dashboards
+	@$(PYTHON) scripts/integrations/agent_dashboard.py
+
+agent-report: ## Print a bounded metadata-only OpenCode report as JSON
+	@$(PYTHON) scripts/integrations/agent_report.py
+
+agent-eval-demo: ## Judge three synthetic task examples using local LM Studio
+	@$(PYTHON) scripts/integrations/agent_evaluate.py --demo

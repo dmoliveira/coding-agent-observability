@@ -110,6 +110,17 @@ AI_OBSERVATORY_DISABLED=1 opencode --standalone
 
 The standalone flag is important: a normal client connects to the already-running shared service, whose environment it cannot change. Other plugins and telemetry exporters are independent and may still record data. Existing traces are not erased. See the [integration guide](docs/opencode.md) for coverage, limitations, and the older per-project launcher.
 
+## 📊 Explore agent operations
+
+```sh
+make agent-dashboards  # two measured Langfuse dashboards; prints their URLs
+make agent-report      # structural, machine-readable JSON for the last seven days
+```
+
+The dashboards show recorded OpenCode prompt turns and model activity, alongside clearly labelled **project-wide** tool metrics. The report joins available observations to their nearest recorded OpenCode turn and reports missing coverage. A turn ending is not proof of task success, and tool charts can include other integrations. Tool/model names and optional trace IDs can be sensitive; see the [agent observability guide](docs/agent-observability.md) for interpretation, privacy, windows and future phases. Neither command runs an evaluator or reads observation input/output.
+
+For an optional local-model task-assessment example, `make agent-eval-demo` judges three synthetic cases. Its labels are **unverified judgments**, not facts or reliable success decisions. The guide describes explicit, bounded evaluation of selected evidence; nothing is backfilled or scheduled automatically.
+
 ## 🧪 Evaluate with local LM Studio models
 
 On **macOS with a local Docker Desktop or OrbStack engine**, install LM Studio 0.4.0 or newer and its `lms` CLI. Remote Docker engines are not supported. Downloaded models and their licenses are managed in LM Studio. This integration does not download models or start its server for you.
@@ -202,7 +213,7 @@ The [documentation site](https://dmoliveira.github.io/coding-agent-observability
 
 ## 🗺️ Later
 
-Richer dashboards and extracted metrics, batch evaluation workflows, a dedicated multi-machine installer, and deeper `my_opencode` integration are future work—not requirements for the initial local stack.
+Task outcome and context instrumentation, richer trajectory analysis, opt-in batch evaluations, a dedicated multi-machine installer, and deeper `my_opencode` integration remain future work. See the [agent observability guide](docs/agent-observability.md).
 
 ## 💜 Support
 
