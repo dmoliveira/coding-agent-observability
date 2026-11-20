@@ -1,10 +1,12 @@
 ![AI Observatory — Private traces. Clearer agents.](assets/observatory-hero.png)
 
-# 🔭 AI Observatory
+# 🔭 AI Observatory — Local-First Coding Agent Observability
 
 ![Local first](https://img.shields.io/badge/access-local%20first-117f78) ![Langfuse](https://img.shields.io/badge/Langfuse-4.82.0-6149aa) ![OpenCode](https://img.shields.io/badge/OpenCode-official%20plugin-252e46) ![License](https://img.shields.io/badge/license-MIT-blue)
 
-A private-first home for coding-agent traces. Run [Langfuse](https://langfuse.com/) on your own Mac or Linux machine, connect OpenCode once for your user, and optionally reach it from other devices on your Tailscale network.
+AI Observatory is a local-first, self-hosted observability stack for coding agents. Trace OpenCode sessions, model generations, and tool calls with [Langfuse](https://langfuse.com/) and OpenTelemetry, using Docker Compose on macOS or Linux. Optionally reach the private dashboard from other devices on your Tailscale network.
+
+OpenCode is the coding-agent integration currently supported by this repository; additional integrations are future work.
 
 **By default nothing is published to the LAN or tailnet.** Docker publishes the web and media ports on localhost only. Tailscale sharing is a separate, explicit step; it is not Tailscale Funnel or public internet access.
 
@@ -117,7 +119,7 @@ make tailscale-on
 
 The command prints the private HTTPS web address. Both dedicated ports must be unused; existing Serve and Funnel configuration is preserved, and concurrent changes are rejected. Enabling Tailscale HTTPS can publish the machine and tailnet DNS name in Certificate Transparency, even though the service is tailnet-only. Tailnet administrators and devices allowed by your grants can reach it; Tailscale does not replace Langfuse authentication.
 
-On the **client machine**, join the same tailnet and clone this private repository. It needs Python, Make, OpenCode 2 and Node.js 22+, but **not Docker or a local server**. Set the trusted server URL printed above and connect OpenCode once:
+On the **client machine**, join the same tailnet and clone the repository. It needs Python, Make, OpenCode 2 and Node.js 22+, but **not Docker or a local server**. Set the trusted server URL printed above and connect OpenCode once:
 
 ```sh
 AI_OBSERVATORY_URL=https://your-server.your-tailnet.ts.net:15443 \
@@ -160,4 +162,4 @@ Dashboards and extracted metrics, batch evaluation workflows, a dedicated multi-
 
 If this project helps you, [support its development](https://buy.stripe.com/8x200i8bSgVe3Vl3g8bfO00).
 
-This repository is private for now. The repository code is MIT licensed; Langfuse and other components have their own licenses and terms.
+The repository code is MIT licensed; Langfuse and other components have their own licenses and terms.
