@@ -227,6 +227,66 @@ def usage_summary(
     return result
 
 
+def task_generation_usage(
+    snapshot: dict[str, Any],
+    turns: set[tuple[str, str]],
+    attached: dict[tuple[str, str], list[dict[str, Any]]],
+    cycle_affected: dict[tuple[str, str], bool],
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    owners = task_evidence.binding_owners(snapshot)
+    unique = {key for key, tasks in owners.items() if len(tasks) == 1}
+    matched = unique & turns
+    cyclic = {key for key in matched if cycle_affected.get(key, True)}
+    eligible = matched - cyclic
+
+    def generations(keys: set[tuple[str, str]]) -> list[dict[str, Any]]:
+        return [
+            row
+            for key in keys
+            for row in attached.get(key, [])
+            if kind(row) == "generation"
+        ]
+
+    def metrics(keys: set[tuple[str, str]]) -> dict[str, Any]:
+        rows = generations(keys)
+        return {
+            "eligible_turns": len(keys),
+            "recorded_generation_observations": len(rows),
+            "turns_without_observed_generations": sum(
+                not generations({key}) for key in keys
+            ),
+            "reported_tokens": usage_summary(rows),
+        }
+
+    overall = {
+        "evidence_class": "observed_usage_conditional_on_attested_binding",
+        **metrics(eligible),
+        "unmatched_unique_bindings": len(unique - turns),
+        "cyclic_unique_bindings": len(cyclic),
+        "ambiguous_bindings_excluded": len(owners) - len(unique),
+        "limitations": [
+            "Task-to-turn links are unverified attestations; exact ID matches do not prove task ownership.",
+            "Only generations attached to eligible turns in the selected observation window are included; missing events and usage remain unknown.",
+            "No child turns or tasks are rolled into parents unless separately bound; ambiguous and cyclic bindings are excluded.",
+            "Token fields may overlap under provider conventions and must not be summed together blindly.",
+        ],
+    }
+    per_task = {}
+    for task in snapshot["tasks"]:
+        keys = {
+            (binding["trace_id"], binding["turn_id"]) for binding in task["bindings"]
+        }
+        selected = keys & eligible
+        per_task[task["id"]] = {
+            **metrics(selected),
+            "unmatched_unique_bindings": len((keys & unique) - turns),
+            "cyclic_unique_bindings": len(keys & cyclic),
+            "ambiguous_bindings_excluded": len(keys - unique),
+            "all_declared_bindings_eligible": bool(keys) and keys <= eligible,
+        }
+    return overall, per_task
+
+
 def permission_wait_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Pair only one ask and one reply sharing the explicit request trace and session."""
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -678,6 +738,16 @@ def build_report(
             {(turn["traceId"], turn["id"]) for turn in turns},
             include_identifiers,
         )
+        usage, per_task_usage = task_generation_usage(
+            task_snapshot,
+            {(turn["traceId"], turn["id"]) for turn in turns},
+            attached,
+            cycle_affected,
+        )
+        report["task_attestations"]["conditional_generation_usage"] = usage
+        if include_identifiers:
+            for task in report["task_attestations"]["tasks"]:
+                task["conditional_generation_usage"] = per_task_usage[task["id"]]
     if include_identifiers:
         details = []
         sessions: dict[str, list[dict[str, Any]]] = defaultdict(list)

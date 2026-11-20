@@ -219,6 +219,122 @@ class TaskEvidenceTests(unittest.TestCase):
         self.assertEqual(summary["unique_bindings_matched"], 1)
         self.assertEqual(summary["unique_bindings_not_observed"], 1)
 
+    def test_conditional_tokens_exclude_ambiguous_missing_and_cyclic_turns(
+        self,
+    ) -> None:
+        start = dt.datetime(2026, 11, 19, tzinfo=dt.timezone.utc)
+        end = dt.datetime(2026, 11, 21, tzinfo=dt.timezone.utc)
+
+        def binding(trace: str, turn: str) -> dict:
+            return {"trace_id": trace, "turn_id": turn}
+
+        value = task_evidence.validate(
+            snapshot(
+                [
+                    task(
+                        "parent_task",
+                        bindings=[
+                            binding("trace", "root"),
+                            binding("trace", "amb"),
+                            binding("cycle", "cy"),
+                            binding("absent", "missing"),
+                        ],
+                    ),
+                    task(
+                        "child_task",
+                        parent_id="parent_task",
+                        bindings=[binding("trace", "child"), binding("trace", "amb")],
+                    ),
+                    task("unbound_task"),
+                ]
+            )
+        )
+
+        def row(
+            identifier: str,
+            name: str,
+            typ: str,
+            parent: str | None = None,
+            trace: str = "trace",
+            **extra: object,
+        ) -> dict:
+            return agent_report.select(
+                {
+                    "id": identifier,
+                    "traceId": trace,
+                    "name": name,
+                    "type": typ,
+                    "parentObservationId": parent,
+                    **extra,
+                }
+            )
+
+        rows = [
+            row("root", "opencode.turn", "AGENT"),
+            row(
+                "gen_root",
+                "opencode.generation",
+                "GENERATION",
+                "root",
+                usageDetails={"input": 10, "total": 12},
+            ),
+            row("child", "opencode.turn", "AGENT", "root"),
+            row(
+                "gen_child",
+                "opencode.generation",
+                "GENERATION",
+                "child",
+                usageDetails={"input": 20, "total": 25},
+            ),
+            row("amb", "opencode.turn", "AGENT"),
+            row(
+                "gen_amb",
+                "opencode.generation",
+                "GENERATION",
+                "amb",
+                usageDetails={"input": 1000},
+            ),
+            row("cy", "opencode.turn", "AGENT", "cy", trace="cycle"),
+        ]
+        result = agent_report.build_report(
+            rows, start, end, task_snapshot=value, include_identifiers=True
+        )
+        section = result["task_attestations"]
+        usage = section["conditional_generation_usage"]
+        self.assertEqual(usage["eligible_turns"], 2)
+        self.assertEqual(usage["recorded_generation_observations"], 2)
+        self.assertEqual(
+            usage["reported_tokens"]["input"], {"sum": 30, "reported": 2, "missing": 0}
+        )
+        self.assertEqual(usage["reported_tokens"]["total"]["sum"], 37)
+        self.assertEqual(usage["ambiguous_bindings_excluded"], 1)
+        self.assertEqual(usage["unmatched_unique_bindings"], 1)
+        self.assertEqual(usage["cyclic_unique_bindings"], 1)
+        details = {
+            item["id"]: item["conditional_generation_usage"]
+            for item in section["tasks"]
+        }
+        self.assertEqual(details["parent_task"]["reported_tokens"]["input"]["sum"], 10)
+        self.assertEqual(details["child_task"]["reported_tokens"]["input"]["sum"], 20)
+        self.assertFalse(details["parent_task"]["all_declared_bindings_eligible"])
+        self.assertIsNone(details["unbound_task"]["reported_tokens"]["input"]["sum"])
+        anonymous = agent_report.build_report(rows, start, end, task_snapshot=value)
+        self.assertNotIn("parent_task", json.dumps(anonymous))
+        self.assertNotIn("tasks", anonymous["task_attestations"])
+
+    def test_eligible_turn_with_no_generation_is_not_zero_usage(self) -> None:
+        value = task_evidence.validate(
+            snapshot(
+                [task("task_1", bindings=[{"trace_id": "trace", "turn_id": "turn"}])]
+            )
+        )
+        key = ("trace", "turn")
+        overall, per_task = agent_report.task_generation_usage(
+            value, {key}, {}, {key: False}
+        )
+        self.assertEqual(overall["turns_without_observed_generations"], 1)
+        self.assertIsNone(per_task["task_1"]["reported_tokens"]["total"]["sum"])
+
     def test_cli_rejects_invalid_selected_file_before_contacting_langfuse(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "bad.json"

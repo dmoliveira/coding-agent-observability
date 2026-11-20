@@ -160,6 +160,14 @@ def read_file(path: Path) -> dict[str, Any]:
     return validate(value)
 
 
+def binding_owners(value: dict[str, Any]) -> dict[tuple[str, str], set[str]]:
+    owners: dict[tuple[str, str], set[str]] = defaultdict(set)
+    for task in value["tasks"]:
+        for binding in task["bindings"]:
+            owners[(binding["trace_id"], binding["turn_id"])].add(task["id"])
+    return dict(owners)
+
+
 def summarize(
     value: dict[str, Any],
     turns: set[tuple[str, str]],
@@ -167,10 +175,7 @@ def summarize(
 ) -> dict[str, Any]:
     tasks = value["tasks"]
     ids = {task["id"] for task in tasks}
-    bindings: dict[tuple[str, str], set[str]] = defaultdict(set)
-    for task in tasks:
-        for binding in task["bindings"]:
-            bindings[(binding["trace_id"], binding["turn_id"])].add(task["id"])
+    bindings = binding_owners(value)
     unique = {key for key, owners in bindings.items() if len(owners) == 1}
     result: dict[str, Any] = {
         "evidence_class": "operator_supplied_attestation",
