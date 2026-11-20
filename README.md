@@ -135,6 +135,21 @@ The integration marker and connection-ownership state are private, ignored local
 
 If setup reports that an interrupted operation may have created a connection, inspect the managed provider in Langfuse before retrying. To start a fresh managed connection without altering the old one, stop other observatory commands, move `.ai-observatory.lmstudio-state.json` to a different private filename outside the repository, and run `make connect-lmstudio` again. Existing evaluators continue to refer to the old connection until you explicitly change them. If a container startup fails, follow the existing `make down` / `make up` recovery instructions; these commands preserve the named volumes.
 
+### Example: classify spans on a dashboard
+
+After connecting LM Studio, create an editable **AI Observatory — Span activity** dashboard and its local evaluator:
+
+```sh
+make span-dashboard       # create or update the managed resources
+make span-dashboard-demo  # add three synthetic spans
+```
+
+The first command prints the dashboard URL. It creates four widgets, a categorical LLM-as-a-Judge evaluator and a rule that classifies **only** new spans with the example's generated name in the `ai-observatory-demo` environment. It does not backfill existing traces, change project defaults, or restart containers. The second command adds three labeled synthetic examples; each invocation adds three more. Results are asynchronous and may take a minute to appear. The widgets show spans received, spans classified, category breakdown and activity over time. Click the printed synthetic trace URL to inspect those examples.
+
+The example sends the span **input** to `google/gemma-3-4b` through the managed LM Studio connection and assigns `inspect`, `change`, `test`, or `other`. It is a small demonstration, not a reliable quality or security judgment. LM Studio must be running and the model registered; change `MODEL` in `scripts/integrations/span_dashboard_definition.py` to use another compatible registered model. Review classification quality with your own labeled samples. The rule's filters, categories, prompt, widget definitions and demo examples live in that file; after editing them, run `make span-dashboard` again. Deliberately expanding the rule can cause future real span inputs to be sent to the model, including sensitive content; check LM Link, network access, sampling and data permissions first. A long input can also be slow or exceed the model's context window.
+
+The commands use the existing local project credentials without printing them. They keep a private ignored `.ai-observatory.span-dashboard-state.json` to identify only resources created by this checkout. Reapplying never adopts resources by name and stops on detected UI edits instead of overwriting them; edit the code for managed changes. Langfuse's dashboard APIs are currently unstable and writes are not conditional, so avoid concurrent UI edits during apply. If an interrupted API request leaves an uncertain operation, inspect the specifically named example resources in Langfuse before recovery; preserve or move the private state file and reconcile any old demo rule rather than deleting unrelated resources. The state is not included in the existing backup archive; if it is lost or after a restore, reconnect LM Studio and inspect/disable any old example rule before recreating the dashboard. The demo refuses to send spans while other enabled evaluation rules could process them.
+
 ## 🔐 Share with another Tailscale machine
 
 On the **server**, connect Tailscale, enable MagicDNS and HTTPS certificates in your tailnet, and review the tailnet's ACLs or grants for ports `15443` and `15444`. Start the stack, then explicitly enable sharing:
@@ -187,7 +202,7 @@ The [documentation site](https://dmoliveira.github.io/coding-agent-observability
 
 ## 🗺️ Later
 
-Dashboards and extracted metrics, batch evaluation workflows, a dedicated multi-machine installer, and deeper `my_opencode` integration are future work—not requirements for the initial local stack.
+Richer dashboards and extracted metrics, batch evaluation workflows, a dedicated multi-machine installer, and deeper `my_opencode` integration are future work—not requirements for the initial local stack.
 
 ## 💜 Support
 

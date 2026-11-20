@@ -1,4 +1,4 @@
-.PHONY: connect-opencode-global connect-opencode run-opencode env-opencode tailscale-on tailscale-off lmstudio-models connect-lmstudio sync-lmstudio-models
+.PHONY: connect-opencode-global connect-opencode run-opencode env-opencode tailscale-on tailscale-off lmstudio-models connect-lmstudio sync-lmstudio-models span-dashboard span-dashboard-demo
 
 connect-opencode-global: ## Enable default-on OpenCode tracing for this user
 	@$(PYTHON) scripts/integrations/opencode_global.py
@@ -27,3 +27,9 @@ connect-lmstudio: ## Connect local LM Studio and add its available language mode
 
 sync-lmstudio-models: ## Add newly available LM Studio models to the managed connection
 	@$(PYTHON) scripts/integrations/lmstudio.py sync
+
+span-dashboard: ## Create or update the local span-classification dashboard
+	@$(PYTHON) scripts/integrations/span_dashboard.py apply
+
+span-dashboard-demo: ## Send three explicitly marked synthetic spans for classification
+	@$(PYTHON) scripts/integrations/span_dashboard.py demo
