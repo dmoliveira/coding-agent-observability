@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from integrations import agent_dashboard_definition as dashboard_spec
 from integrations import span_dashboard
 
 UTC = dt.timezone.utc
@@ -33,7 +34,15 @@ SELECTED = (
     "isRootObservation",
     "model",
     "latency",
+    "environment",
 )
+RUNTIME_NAMES = {
+    "aiobs.execution.started",
+    "aiobs.execution.succeeded",
+    "aiobs.execution.failed",
+    *dashboard_spec.INTERRUPTED,
+    *(name for names in dashboard_spec.COMPACTION.values() for name in names),
+}
 
 
 def timestamp(value: str) -> dt.datetime:
@@ -75,6 +84,7 @@ def select(row: Any) -> dict[str, Any]:
         "endTime",
         "sessionId",
         "model",
+        "environment",
     ):
         value = selected[key]
         if not isinstance(value, str) or len(value) > 512:
@@ -157,6 +167,12 @@ def fetch_observations(
 
 
 def kind(row: dict[str, Any]) -> str:
+    if (
+        row.get("type") == "EVENT"
+        and row.get("environment") == dashboard_spec.RUNTIME_ENVIRONMENT
+        and row.get("name") in RUNTIME_NAMES
+    ):
+        return "runtime"
     if row.get("name") == "opencode.turn" and row.get("type") == "AGENT":
         return "turn"
     if (
@@ -193,9 +209,11 @@ def latency_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def usage_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+def usage_summary(
+    rows: list[dict[str, Any]], keys: tuple[str, ...] = TOKEN_KEYS
+) -> dict[str, Any]:
     result = {}
-    for key in TOKEN_KEYS:
+    for key in keys:
         values = [
             value for row in rows if (value := row["usageDetails"].get(key)) is not None
         ]
@@ -436,6 +454,13 @@ def build_report(
     tools = [row for row in linked if kind(row) == "tool"]
     generations = [row for row in linked if kind(row) == "generation"]
     retries = [row for row in linked if kind(row) == "retry"]
+    runtime_events = [row for row in rows if kind(row) == "runtime"]
+    compaction_events = [
+        row
+        for row in runtime_events
+        if row["name"]
+        in {*dashboard_spec.COMPACTION["ended"], *dashboard_spec.COMPACTION["failed"]}
+    ]
     root_turns = [row for row in turns if row.get("isRootObservation") is True]
     patterns = {}
     timings = {}
@@ -454,7 +479,7 @@ def build_report(
     daily: dict[str, Counter] = defaultdict(Counter)
     weekly: dict[str, Counter] = defaultdict(Counter)
     missing_start = 0
-    for row in [*turns, *linked]:
+    for row in [*turns, *linked, *runtime_events]:
         try:
             date = timestamp(row.get("startTime")).date()
         except ValueError:
@@ -523,6 +548,19 @@ def build_report(
         },
         "linked_tools": {**group_summary(tools), "by_name": by_name(tools, "name")},
         "linked_retry_events": len(retries),
+        "runtime_events": {
+            "observations": len(runtime_events),
+            "by_name": dict(
+                sorted(Counter(row["name"] for row in runtime_events).items())
+            ),
+            "compaction_terminal_observations": len(compaction_events),
+            "compaction_reported_tokens": usage_summary(
+                compaction_events,
+                ("input", "output", "reasoning", "cache_read", "cache_write"),
+            ),
+            "coverage": "unknown; opt-in live capture may be disabled, interrupted or lose events",
+            "scope": "session busy periods and compaction; not prompt or task outcomes",
+        },
         "tool_sequence_candidates": {
             "description": "Name-only sequences ordered by start time; inputs, causality, concurrency and correctness are not established.",
             "turns_evaluated": sum(item["available"] for item in patterns.values()),
@@ -563,7 +601,7 @@ def build_report(
     if include_identifiers:
         details = []
         sessions: dict[str, list[dict[str, Any]]] = defaultdict(list)
-        for row in [*turns, *linked]:
+        for row in [*turns, *linked, *runtime_events]:
             sessions[safe_name(row.get("sessionId"))].append(row)
         for turn in sorted(
             turns, key=lambda item: (item.get("startTime") or "", item["id"])
@@ -608,6 +646,13 @@ def build_report(
                 "turns": sum(kind(row) == "turn" for row in group),
                 "linked_tools": sum(kind(row) == "tool" for row in group),
                 "linked_generations": sum(kind(row) == "generation" for row in group),
+                "runtime_events": dict(
+                    sorted(
+                        Counter(
+                            row["name"] for row in group if kind(row) == "runtime"
+                        ).items()
+                    )
+                ),
                 "reported_tokens": usage_summary(
                     [row for row in group if kind(row) == "generation"]
                 ),

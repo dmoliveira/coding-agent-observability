@@ -8,7 +8,7 @@ include make/stack.mk
 include make/integrations.mk
 include make/backup.mk
 
-.PHONY: test lint check prepare-opencode-test prepare-site site-build smoke-opencode-global smoke-opencode-shared
+.PHONY: test lint check prepare-opencode-test prepare-site site-build smoke-opencode-global smoke-opencode-shared smoke-opencode-events
 
 prepare-opencode-test: ## Install and prepare the pinned OpenCode test plugin
 	npm --prefix integrations/opencode-global ci --ignore-scripts --no-audit --no-fund
@@ -23,6 +23,7 @@ site-build: prepare-site ## Build the public documentation site into site/dist
 test: prepare-opencode-test prepare-site ## Run the automated test suite
 	$(PYTHON) -m unittest discover -s tests -v
 	npm --prefix integrations/opencode-global test
+	npm --prefix integrations/opencode-events test
 	npm --prefix site test
 
 lint: ## Check Python code with Ruff
@@ -36,3 +37,6 @@ smoke-opencode-global: prepare-opencode-test ## Test OpenCode tracing using loca
 
 smoke-opencode-shared: prepare-opencode-test ## Test shared-server tracing through an in-flight reload
 	$(PYTHON) tests/smoke_opencode_shared.py
+
+smoke-opencode-events: prepare-opencode-test ## Test structural events using isolated synthetic services
+	$(PYTHON) tests/smoke_opencode_events.py

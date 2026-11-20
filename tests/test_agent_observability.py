@@ -79,7 +79,7 @@ class DashboardTests(unittest.TestCase):
                 path == span_dashboard.PATHS["dashboard"]
                 for _, path, _ in self.client.writes
             ),
-            2,
+            3,
         )
         self.assertTrue(
             all(
@@ -96,6 +96,7 @@ class DashboardTests(unittest.TestCase):
         state, _ = span_dashboard.read_state(agent_dashboard.STATE_NAME)
         self.assertIn("dashboard:operations", state["resources"])
         self.assertIn("dashboard:performance", state["resources"])
+        self.assertIn("dashboard:runtime", state["resources"])
         definitions = agent_dashboard_definition.definitions()
         self.assertIn("project-wide", definitions["performance"]["description"])
         self.assertIn("not proof", definitions["operations"]["description"])
@@ -445,6 +446,111 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(value["tool_sequence_candidates"]["turns_unavailable"], 1)
         self.assertEqual(
             value["turn_timing_coverage"]["turns_without_usable_timing"], 1
+        )
+
+    def test_structural_runtime_events_are_not_attributed_to_turns(self) -> None:
+        environment = agent_dashboard_definition.RUNTIME_ENVIRONMENT
+        rows = [
+            report.select(
+                observation("turn", "opencode.turn", "AGENT", isRootObservation=True)
+            ),
+            report.select(
+                observation(
+                    "event",
+                    "aiobs.execution.succeeded",
+                    "EVENT",
+                    "turn",
+                    environment=environment,
+                )
+            ),
+            report.select(
+                observation(
+                    "foreign",
+                    "aiobs.execution.failed",
+                    "EVENT",
+                    "turn",
+                    environment="other",
+                )
+            ),
+            report.select(
+                observation(
+                    "other-name",
+                    "unrecognized",
+                    "EVENT",
+                    "turn",
+                    environment=environment,
+                )
+            ),
+        ]
+        value = report.build_report(
+            rows, self.start, self.end, include_identifiers=True
+        )
+        self.assertEqual(
+            value["runtime_events"]["by_name"], {"aiobs.execution.succeeded": 1}
+        )
+        self.assertEqual(value["turn_details"][0]["timeline"], [])
+        self.assertIn("not prompt or task outcomes", value["runtime_events"]["scope"])
+        self.assertEqual(
+            value["sessions"][0]["runtime_events"], {"aiobs.execution.succeeded": 1}
+        )
+
+    def test_compaction_usage_is_separate_and_reports_missing_fields(self) -> None:
+        environment = agent_dashboard_definition.RUNTIME_ENVIRONMENT
+        rows = [
+            report.select(
+                observation("turn", "opencode.turn", "AGENT", isRootObservation=True)
+            ),
+            report.select(
+                observation(
+                    "gen",
+                    "opencode.generation",
+                    "GENERATION",
+                    "turn",
+                    usageDetails={"input": 100},
+                )
+            ),
+            report.select(
+                observation(
+                    "compact",
+                    "aiobs.compaction.ended.auto",
+                    "EVENT",
+                    environment=environment,
+                    usageDetails={"input": 10, "output": 3, "cache_read": 0},
+                )
+            ),
+            report.select(
+                observation(
+                    "failed",
+                    "aiobs.compaction.failed.manual",
+                    "EVENT",
+                    environment=environment,
+                )
+            ),
+            report.select(
+                observation(
+                    "started",
+                    "aiobs.compaction.started.auto",
+                    "EVENT",
+                    environment=environment,
+                    usageDetails={"input": 999},
+                )
+            ),
+        ]
+        value = report.build_report(rows, self.start, self.end)
+        runtime = value["runtime_events"]
+        self.assertEqual(runtime["compaction_terminal_observations"], 2)
+        self.assertEqual(
+            runtime["compaction_reported_tokens"]["input"],
+            {"sum": 10, "reported": 1, "missing": 1},
+        )
+        self.assertEqual(
+            runtime["compaction_reported_tokens"]["cache_read"],
+            {"sum": 0, "reported": 1, "missing": 1},
+        )
+        self.assertIsNone(runtime["compaction_reported_tokens"]["reasoning"]["sum"])
+        self.assertNotIn("total", runtime["compaction_reported_tokens"])
+        self.assertEqual(
+            value["linked_generations"]["reported_tokens"]["input"]["sum"], 100
         )
 
 

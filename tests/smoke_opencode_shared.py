@@ -17,6 +17,9 @@ from typing import ClassVar
 
 base = Path(os.environ.get("TMPDIR", tempfile.gettempdir())).resolve()
 adapter = Path(__file__).resolve().parents[1] / "integrations/opencode-global/index.js"
+events_adapter = (
+    Path(__file__).resolve().parents[1] / "integrations/opencode-events/index.js"
+)
 
 
 class Sink(BaseHTTPRequestHandler):
@@ -55,7 +58,9 @@ class Model(BaseHTTPRequestHandler):
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-        hold = "AI-OBS-SYNTHETIC-SESSION-A" in json.dumps(body.get("messages", []))
+        messages = json.dumps(body.get("messages", []))
+        hold = "AI-OBS-SYNTHETIC-SESSION-A" in messages
+        compacting = "You MUST use this format" in messages
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
@@ -64,7 +69,15 @@ class Model(BaseHTTPRequestHandler):
             if not Model.release.wait(60):
                 return
         for delta, finish in (
-            ({"role": "assistant", "content": "synthetic"}, None),
+            (
+                {
+                    "role": "assistant",
+                    "content": "## Objective\n- synthetic"
+                    if compacting
+                    else "synthetic",
+                },
+                None,
+            ),
             ({}, "stop"),
         ):
             event = {
@@ -74,6 +87,12 @@ class Model(BaseHTTPRequestHandler):
                 "model": "mock-model",
                 "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
             }
+            if compacting and finish:
+                event["usage"] = {
+                    "prompt_tokens": 12,
+                    "completion_tokens": 3,
+                    "total_tokens": 15,
+                }
             self.wfile.write(b"data: " + json.dumps(event).encode() + b"\n\n")
         self.wfile.write(b"data: [DONE]\n\n")
 
@@ -117,6 +136,9 @@ try:
         plug.mkdir(parents=True)
         (plug / "ai-observatory.js").write_text(
             f"export {{ default }} from {json.dumps(adapter.as_uri())};\n"
+        )
+        (plug / "ai-observatory-events.js").write_text(
+            f"export {{ default }} from {json.dumps(events_adapter.as_uri())};\n"
         )
         probe = root / "probe.txt"
         (plug / "sandbox-probe.js").write_text(
@@ -290,6 +312,18 @@ export default { id: "aiobs.sandbox.probe", setup(ctx) {
                 or names.count("opencode.generation") != 1
             ):
                 raise AssertionError(f"session {label} unexpected span names: {names}")
+            if (
+                names.count("aiobs.execution.started") != 1
+                or names.count("aiobs.execution.succeeded") != 1
+            ):
+                raise AssertionError(
+                    f"session {label} unexpected structural event counts: {names}"
+                )
+            for item in session_spans:
+                if item["name"].startswith(
+                    "aiobs."
+                ) and "AI-OBS-SYNTHETIC-SESSION" in json.dumps(item):
+                    raise AssertionError("structural event leaked synthetic prompt")
             generation = next(
                 s for s in session_spans if s["name"] == "opencode.generation"
             )
@@ -308,8 +342,87 @@ export default { id: "aiobs.sandbox.probe", setup(ctx) {
                 raise AssertionError(
                     f"session {label} generation output was incomplete"
                 )
+        # Exercise an actual manual compaction in the isolated server, not just a fabricated event.
+        request = urllib.request.Request(
+            url + f"/api/session/{session_ids['A']}/compact",
+            data=b"{}",
+            method="POST",
+            headers={
+                "Authorization": "Basic "
+                + base64.b64encode(b"opencode:sandbox-password").decode(),
+                "Content-Type": "application/json",
+            },
+        )
+        with opener.open(request, timeout=30) as response:
+            assert response.status in (200, 201, 202)
+        continuation = subprocess.run(
+            [
+                "opencode",
+                "--server",
+                url,
+                "run",
+                "--auto",
+                "--session",
+                session_ids["A"],
+                "--model",
+                "mock/mock-model",
+                "AI-OBS-SYNTHETIC-AFTER-COMPACTION",
+            ],
+            cwd=a,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=90,
+            check=False,
+        )
+        if continuation.returncode:
+            raise AssertionError("synthetic continuation after compaction failed")
+        deadline = time.monotonic() + 45
+        while time.monotonic() < deadline:
+            compact_spans = [
+                s
+                for s in readspans()
+                if s["name"].startswith("aiobs.compaction.")
+                and any(
+                    a.get("key") == "session.id"
+                    and a.get("value", {}).get("stringValue") == session_ids["A"]
+                    for a in s.get("attributes", [])
+                )
+            ]
+            if any(s["name"] == "aiobs.compaction.ended.manual" for s in compact_spans):
+                break
+            time.sleep(0.1)
+        else:
+            raise AssertionError(
+                "synthetic manual compaction did not complete: "
+                + str([s["name"] for s in compact_spans])
+            )
+        assert (
+            sum(s["name"] == "aiobs.compaction.started.manual" for s in compact_spans)
+            == 1
+        )
+        ended = next(
+            s for s in compact_spans if s["name"] == "aiobs.compaction.ended.manual"
+        )
+        attrs = {
+            a["key"]: a["value"]["stringValue"] for a in ended.get("attributes", [])
+        }
+        usage = json.loads(attrs["langfuse.observation.usage_details"])
+        assert set(usage) == {
+            "input",
+            "output",
+            "reasoning",
+            "cache_read",
+            "cache_write",
+        }
+        assert all(isinstance(value, int) and value >= 0 for value in usage.values())
+        assert (usage["input"], usage["output"]) == (12, 3), (
+            "compaction token counts were not preserved"
+        )
+        assert "AI-OBS-SYNTHETIC-SESSION" not in json.dumps(compact_spans)
         print(
-            "PASS: two shared-server locations, explicit reload while one remained active; exactly one turn and generation each"
+            "PASS: two locations, in-flight reload, execution events and content-free manual compaction usage"
         )
 finally:
     Model.release.set()
