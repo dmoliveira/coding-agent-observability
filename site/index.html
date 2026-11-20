@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#09111c">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>AI Observatory — private traces, clearer agents</title>
+  <meta name="description" content="Local-first coding agent observability. Trace OpenCode sessions, model generations, and tool calls with self-hosted Langfuse and OpenTelemetry.">
+  <link rel="canonical" href="https://dmoliveira.github.io/coding-agent-observability/">
+  <meta property="og:title" content="AI Observatory — private traces, clearer agents">
+  <meta property="og:description" content="A local-first observability stack for OpenCode, Langfuse, and the work your coding agents do.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://dmoliveira.github.io/coding-agent-observability/">
+  <meta property="og:image" content="https://dmoliveira.github.io/coding-agent-observability/assets/observatory-hero.png">
+  <link rel="icon" href="assets/mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <div class="shell header-inner">
+      <a class="brand" href="./" aria-label="AI Observatory home">
+        <img src="assets/mark.svg" alt="" width="34" height="34">
+        <span>AI Observatory<small>PRIVATE TRACES. CLEARER AGENTS.</small></span>
+      </a>
+      <nav class="main-nav" aria-label="Main navigation">
+        <a href="#how-it-works">How it works</a>
+        <a href="guide/">Documentation</a>
+        <a href="security/">Security</a>
+        <a class="nav-github" href="https://github.com/dmoliveira/coding-agent-observability">GitHub <span aria-hidden="true">↗</span></a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero shell" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <p class="eyebrow"><span class="status-dot" aria-hidden="true"></span> LOCAL-FIRST · SELF-HOSTED · OPEN SOURCE</p>
+        <h1 id="hero-title">Your agents<br class="mobile-break"> do a lot.<br><em>See the whole story.</em></h1>
+        <p class="hero-lede">A quieter, clearer home for coding-agent traces. Run Langfuse on your own machine and follow OpenCode sessions, generations, and tool calls from start to finish.</p>
+        <div class="button-row">
+          <a class="button button-primary" href="guide/">Get started <span aria-hidden="true">↗</span></a>
+          <a class="button button-secondary" href="https://github.com/dmoliveira/coding-agent-observability">View on GitHub <span aria-hidden="true">↗</span></a>
+        </div>
+        <p class="hero-footnote"><span aria-hidden="true">◌</span> Your observability stack. Your machine. Your data.</p>
+      </div>
+      <div class="hero-visual" aria-label="Illustration of the observatory and an example trace">
+        <div class="observatory-art" aria-hidden="true"></div>
+        <div class="orbit orbit-one" aria-hidden="true"></div>
+        <div class="orbit orbit-two" aria-hidden="true"></div>
+        <div class="visual-label"><span aria-hidden="true">✳</span> A LITTLE MORE CLARITY</div>
+        <div class="trace-card">
+          <div class="trace-card-top"><span><span class="status-dot" aria-hidden="true"></span> TRACE EXPLORER</span><span>ILLUSTRATIVE</span></div>
+          <div class="trace-title"><span class="trace-icon" aria-hidden="true">⌘</span><div><strong>Coding session</strong><small>From question to outcome</small></div></div>
+          <div class="trace-list">
+            <div class="trace-item"><span class="trace-line-dot mint" aria-hidden="true"></span><span>Understand the request</span><small>SESSION</small></div>
+            <div class="trace-item"><span class="trace-line-dot violet" aria-hidden="true"></span><span>Generate a response</span><small>MODEL</small></div>
+            <div class="trace-item"><span class="trace-line-dot amber" aria-hidden="true"></span><span>Run a tool</span><small>TOOL</small></div>
+          </div>
+          <div class="trace-card-bottom"><span>One connected story</span><span class="trace-wave" aria-hidden="true">▂ ▃ ▅ ▃ ▆ ▄ ▂ ▅ ▃</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="signal-strip" aria-label="Built with">
+      <div class="shell signal-inner">
+        <span>BUILT FOR THE TOOLS YOU USE</span>
+        <div><strong>OpenCode</strong><i aria-hidden="true">✳</i><strong>Langfuse</strong><i aria-hidden="true">✳</i><strong>OpenTelemetry</strong><i aria-hidden="true">✳</i><strong>Docker</strong></div>
+      </div>
+    </section>
+
+    <section class="section shell" id="why" aria-labelledby="why-title">
+      <div class="section-heading">
+        <div><p class="eyebrow">01 / THE IDEA</p><h2 id="why-title">Less black box.<br><em>More understanding.</em></h2></div>
+        <p>When agents move quickly, the interesting details can disappear. Keep the context you need to understand what happened—without giving up control of where the traces live.</p>
+      </div>
+      <div class="feature-grid">
+        <article class="feature-card"><span class="feature-icon mint-icon" aria-hidden="true">◎</span><p class="card-number">01 / OBSERVE</p><h3>Follow the full flow</h3><p>See OpenCode sessions, model generations, and tool activity together instead of piecing the story together afterward.</p></article>
+        <article class="feature-card"><span class="feature-icon violet-icon" aria-hidden="true">◈</span><p class="card-number">02 / OWN</p><h3>Keep it close</h3><p>Self-host the observability stack on macOS or Linux. Its browser-facing ports bind to localhost by default.</p></article>
+        <article class="feature-card"><span class="feature-icon amber-icon" aria-hidden="true">↗</span><p class="card-number">03 / CONNECT</p><h3>Share deliberately</h3><p>Connect OpenCode once for your user. Reach the dashboard from a permitted Tailscale device only when you opt in.</p></article>
+      </div>
+      <div class="privacy-note"><span aria-hidden="true">✳</span><p><strong>Private-first is not secret-free.</strong> Traces can contain prompts, source code, reasoning, and credentials. Model-provider traffic is separate and may leave your machine. <a href="security/">Read the security guide →</a></p></div>
+    </section>
+
+    <section class="section steps-section" id="how-it-works" aria-labelledby="steps-title">
+      <div class="shell steps-layout">
+        <div class="steps-copy"><p class="eyebrow">02 / THE SETUP</p><h2 id="steps-title">A small setup.<br><em>A clearer picture.</em></h2><p>Start the local stack, connect OpenCode, and follow the work in Langfuse. The detailed guide covers credentials, backups, and optional private sharing.</p><a class="text-link" href="guide/">Explore the documentation <span aria-hidden="true">↗</span></a></div>
+        <div class="steps-list">
+          <article class="step"><span class="step-number">01</span><div><h3>Start the local stack</h3><p>Clone the repository and run setup with Docker and Compose.</p><code>make setup &amp;&amp; make up</code></div></article>
+          <article class="step"><span class="step-number">02</span><div><h3>Connect OpenCode</h3><p>Create a Langfuse project key, then connect it once for your user.</p><code>make connect-opencode-global</code></div></article>
+          <article class="step"><span class="step-number">03</span><div><h3>Follow the trace</h3><p>Open the dashboard and inspect the sessions and tool activity you chose to record.</p><code>make open</code></div></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section shell" aria-labelledby="docs-title">
+      <div class="section-heading compact-heading"><div><p class="eyebrow">03 / GO DEEPER</p><h2 id="docs-title">The details, <em>documented.</em></h2></div><p>Useful defaults are only the beginning. Get the full picture before you connect, share, or back up an instance.</p></div>
+      <div class="docs-grid">
+        <a class="doc-card" href="guide/"><span class="doc-card-top">START HERE <span aria-hidden="true">↗</span></span><h3>Getting started</h3><p>Requirements, installation, Bitwarden, sharing, and backup.</p><span class="doc-card-bottom">READ THE GUIDE →</span></a>
+        <a class="doc-card" href="opencode/"><span class="doc-card-top">INTEGRATION <span aria-hidden="true">↗</span></span><h3>OpenCode tracing</h3><p>Understand the adapter, coverage, credentials, and opt-out.</p><span class="doc-card-bottom">EXPLORE OPENCODE →</span></a>
+        <a class="doc-card" href="security/"><span class="doc-card-top">READ FIRST <span aria-hidden="true">↗</span></span><h3>Security &amp; privacy</h3><p>Know the boundaries around traces, networks, and backups.</p><span class="doc-card-bottom">REVIEW THE BOUNDARIES →</span></a>
+      </div>
+    </section>
+
+    <section class="closing shell" aria-labelledby="closing-title">
+      <div><p class="eyebrow">BUILT FOR CURIOSITY</p><h2 id="closing-title">Give your agents<br><em>a little more daylight.</em></h2><p>Start locally. Explore deliberately. Keep the context that matters.</p></div>
+      <a class="button button-primary" href="guide/">Start exploring <span aria-hidden="true">↗</span></a>
+    </section>
+  </main>
+
+  <footer class="site-footer"><div class="shell footer-inner"><a class="footer-brand" href="./"><img src="assets/mark.svg" alt="" width="28" height="28"> AI Observatory</a><p>Private traces. Clearer agents.</p><div><a href="guide/">Docs</a><a href="security/">Security</a><a href="licenses/">Licenses</a><a href="https://github.com/dmoliveira/coding-agent-observability">GitHub ↗</a></div></div></footer>
+</body>
+</html>

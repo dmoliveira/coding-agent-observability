@@ -36,6 +36,6 @@ The original `make connect-opencode PROJECT=/absolute/path` and `make run-openco
 
 ## Development checks
 
-`make check` installs and prepares the integrity-pinned plugin without running npm lifecycle scripts, then runs the Python and Node tests. `make smoke-opencode-global` and `make smoke-opencode-shared` additionally need OpenCode 2 and use isolated configurations, a fake model and local collectors; they do not connect to the real Langfuse instance or invoke a paid model.
+`make check` installs and prepares the integrity-pinned plugin without running npm lifecycle scripts, then runs the Python, Node, and documentation-site tests. `make smoke-opencode-global` and `make smoke-opencode-shared` additionally need OpenCode 2 and use isolated configurations, a fake model and local collectors; they do not connect to the real Langfuse instance or invoke a paid model.
 
 Official references: [plugin v0.7.0](https://github.com/langfuse/opencode-observability-plugin/tree/v0.7.0) and [OpenCode plugins](https://opencode.ai/v2/docs/plugins).

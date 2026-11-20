@@ -8,6 +8,8 @@ AI Observatory is a local-first, self-hosted observability stack for coding agen
 
 OpenCode is the coding-agent integration currently supported by this repository; additional integrations are future work.
 
+[Read the documentation](https://dmoliveira.github.io/coding-agent-observability/) · [Security and privacy](docs/security.md) · [Third-party notices](THIRD_PARTY_NOTICES.md)
+
 **By default nothing is published to the LAN or tailnet.** Docker publishes the web and media ports on localhost only. Tailscale sharing is a separate, explicit step; it is not Tailscale Funnel or public internet access.
 
 > Once enabled, traces can contain prompts, previous conversation context, reasoning, source code, tool inputs and outputs, and secrets. Only trace data you are allowed to store. See [security and privacy](docs/security.md).
@@ -17,8 +19,8 @@ OpenCode is the coding-agent integration currently supported by this repository;
 Requirements: macOS or Linux, Python 3.10+, Docker Engine **28+** with Docker Compose, Make, and free localhost ports `3000` and `9090`. The initial image downloads require internet access. On macOS, start Docker Desktop first.
 
 ```sh
-git clone https://github.com/dmoliveira/ai-observatory.git
-cd ai-observatory
+git clone https://github.com/dmoliveira/coding-agent-observability.git
+cd coding-agent-observability
 make help
 make doctor
 make setup
@@ -154,6 +156,10 @@ Backups include PostgreSQL, ClickHouse, Redis queues, MinIO, and `.env` secrets.
 
 Restore creates newly named volumes, preserves the original instance and archive, and defaults to localhost. If both instances are on the same machine, stop the original before starting the restored copy, or deliberately choose different local ports in its `.env` and matching URLs. Validate login and representative traces/media before relying on a restore. Checksums detect accidental corruption, not malicious modification. Do not run backup concurrently with another Docker command that starts or attaches the same volumes.
 
+## 🛠️ Develop the documentation site
+
+The [documentation site](https://dmoliveira.github.io/coding-agent-observability/) is built from this README and the Markdown guides in `docs/`. With Node.js 22 or newer, run `make site-build` and open `site/dist/index.html` locally. The generated site is ignored by Git and contains only an explicit allowlist of public files. `make check` includes the site tests; after building, `npm --prefix site run test:browser` optionally checks responsive layouts using a local Chrome installation.
+
 ## 🗺️ Later
 
 Dashboards and extracted metrics, batch evaluation workflows, a dedicated multi-machine installer, and deeper `my_opencode` integration are future work—not requirements for the initial local stack.
@@ -162,4 +168,4 @@ Dashboards and extracted metrics, batch evaluation workflows, a dedicated multi-
 
 If this project helps you, [support its development](https://buy.stripe.com/8x200i8bSgVe3Vl3g8bfO00).
 
-The repository code is MIT licensed; Langfuse and other components have their own licenses and terms.
+The repository code is MIT licensed; Langfuse and other components have their own licenses and terms. See [third-party notices](THIRD_PARTY_NOTICES.md).

@@ -29,4 +29,4 @@ If route cleanup fails during `make down`, the containers are still stopped and 
 
 ## Reporting
 
-Do not include credentials, private trace content, local API tokens, or backup archives in issue reports. Contact the repository owner privately for security concerns.
+Do not include credentials, private trace content, local API tokens, or backup archives in issue reports. Use [private vulnerability reporting](https://github.com/dmoliveira/coding-agent-observability/security/advisories/new) for security concerns, or contact the repository owner privately if it is unavailable.
