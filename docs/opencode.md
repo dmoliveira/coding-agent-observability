@@ -1,4 +1,6 @@
-# OpenCode integration
+<a id="opencode-integration"></a>
+
+# OpenCode tracing with self-hosted Langfuse
 
 Run `make connect-opencode-global` once in a terminal, using an API key from your private Langfuse project's settings. The command verifies the key against an explicit loopback endpoint or the HTTPS Tailscale URL in `AI_OBSERVATORY_URL`, then installs a global OpenCode 2 plugin. It does not change `opencode.json(c)`, `my_opencode`, existing project files, or unrelated credentials. It refuses to overwrite an existing plugin entry or a modified managed installation.
 
