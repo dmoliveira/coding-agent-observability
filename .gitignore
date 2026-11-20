@@ -3,6 +3,8 @@
 !.env.example
 .ai-observatory.lock
 .ai-observatory.starting
+.ai-observatory.lmstudio
+.ai-observatory.lmstudio-state.json
 backups/
 __pycache__/
 .pytest_cache/

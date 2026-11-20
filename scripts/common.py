@@ -16,6 +16,9 @@ from urllib.parse import urlsplit
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG = ROOT / ".env"
 COMPOSE = ROOT / "compose.yaml"
+LMSTUDIO_COMPOSE = ROOT / "compose.lmstudio.yaml"
+LMSTUDIO_MARKER = ".ai-observatory.lmstudio"
+LMSTUDIO_MARKER_CONTENT = b"ai-observatory-lmstudio-v1\n"
 _LOCK_FD: int | None = None
 CONFIG_KEYS = {
     "COMPOSE_PROJECT_NAME",
@@ -140,14 +143,39 @@ def load_config(path: Path = CONFIG) -> dict[str, str]:
     return result
 
 
+def lmstudio_enabled() -> bool:
+    """Recognize only this checkout's private, explicitly enabled integration."""
+    marker = ROOT / LMSTUDIO_MARKER
+    try:
+        fd = os.open(marker, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except FileNotFoundError:
+        return False
+    with os.fdopen(fd, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.getuid()
+            or info.st_mode & 0o077
+            or info.st_size != len(LMSTUDIO_MARKER_CONTENT)
+            or stream.read() != LMSTUDIO_MARKER_CONTENT
+        ):
+            raise ValueError("LM Studio integration marker is unsafe or unrecognized.")
+    return True
+
+
 def compose_command(config: dict[str, str], *args: str) -> list[str]:
-    return [
+    command = [
         "docker",
         "compose",
         "--env-file",
         str(CONFIG),
         "--file",
         str(COMPOSE),
+    ]
+    if lmstudio_enabled():
+        command.extend(("--file", str(LMSTUDIO_COMPOSE)))
+    return [
+        *command,
         "--project-name",
         config["COMPOSE_PROJECT_NAME"],
         *args,
@@ -212,6 +240,7 @@ def compose_environment(
         if key.startswith(("BW_", "BWS_", "BITWARDENCLI_")) or key in (
             "AI_OBSERVATORY_ADMIN_PASSWORD",
             "AI_OBSERVATORY_BITWARDEN_ITEM",
+            "AI_OBSERVATORY_LM_STUDIO_TOKEN",
         ):
             env.pop(key)
     if admin_password is not None:
