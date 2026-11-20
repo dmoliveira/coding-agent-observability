@@ -1,0 +1,84 @@
+# OpenCode observability: execution plan
+
+**Status:** in progress. This is the delivery plan, not a claim that every item is implemented. Work is sequenced below; the current implementation and its limitations are documented separately as capabilities land.
+
+The current slice supplies the measured dashboards and structural report in phase 2, plus name-only sequence candidates and a deliberately limited, manually selected local-model evaluation example. It does not implement task lifecycle instrumentation, reliable task outcomes, verified root causes, context/compaction analytics, automatic Langfuse score enrichment, or a scheduler. A small synthetic judge check is a smoke test, not evidence of production reliability.
+
+## Goal and boundaries
+
+Help people and agents understand coding-agent work, identify improvement opportunities, and drill from aggregates to supporting evidence. Use Langfuse's existing local data and native dashboards where they are truthful; add a local, versioned machine-readable view where relationships require computation. Do not treat an LLM's opinion as a fact or an absence of evidence as a pass.
+
+Preserve existing traces, volumes, project defaults, other integrations, credentials, and the manual backup/restore workflow. Do not backfill or automatically evaluate existing private content. No automated backups or volume migration. New collection and inference must have explicit scope, resource limits, an off switch, and documented privacy implications. Existing tracing already collects sensitive prompts, code and tool I/O; this plan does not make that data safe to publish.
+
+## Source inventory and observed constraints
+
+Inspected the pinned `@langfuse/opencode-observability-plugin@0.7.0`, OpenCode 2.2.5's API/contract, Langfuse 4.82.0's v2 observation and metrics APIs, and a read-only aggregate/structural sample of the live project. No trace input/output or credentials were printed. Counts are a changing sample, not a benchmark.
+
+| Source | Evidence available | Important limitation |
+| --- | --- | --- |
+| Langfuse `opencode.turn` | A prompt-admission turn, start/end, logical-root flag, session/trace IDs, error level when explicitly marked | A turn is not necessarily a task. In this plugin successful and interrupted executions end the turn similarly; a non-error level is **not** evidence of success, satisfaction, or completion. In-flight/unexported/lost turns may be absent. |
+| Langfuse `opencode.generation` | Model, timing, usage/cost where reported, agent/provider/finish metadata, explicit generation errors and retry events | Counts are model steps, not tasks. Provider token conventions differ; cost may be missing. Retries and failed steps can occur in a recovered turn. |
+| Langfuse `TOOL` | Tool name, duration and explicit error level, parent/trace/session IDs where available | Other integrations may also emit TOOL observations. Native metrics cannot join tool spans to their OpenCode parent; therefore project-wide tool charts must say so. A tool can return an application failure without an ERROR level. |
+| OpenCode runtime | Durable execution, tool, retry, compaction and usage events; session/parent relationships; experimental aggregate stats | Not every event is exported by the current plugin. Experimental APIs and event schemas can change. Cross-system IDs, replay, restarts and late/duplicate events need explicit contracts before joining. |
+| LM Studio / Langfuse evaluators | Existing local managed connection and a demo-only evaluator | A judge is fallible, sensitive to prompt injection and model/context limits. The existing demo rule is restricted to specifically named synthetic spans and does not backfill. Local routing must be rechecked at each real-data run. |
+| Codememory / user feedback | Potential explicit epic/task links, task lifecycle, human outcomes and feedback | No universal join to OpenCode turns or proof of satisfaction currently exists. Do not infer a task/epic from timestamps or titles. |
+
+The live structural sample included logical-root tools and tools that did not share a trace with an observed turn in the selected window; the population can include other emitters and time-window boundary effects. Most tool observations did not carry a usable trace name. Generation token fields were usually present; cost was not. This evidence rules out presenting all project tools as OpenCode-only or equating an ended turn with success. No live counts or content are recorded in this public plan.
+
+Langfuse v2 metrics supports observation count, latency percentiles, token sums, names, types, levels, model, environment and time buckets. It does not support grouping by high-cardinality trace/session IDs, nor a general parent/child join in a widget. V2 observations supports cursor pagination and selected field groups, including a way to omit I/O. A page can be empty with a next cursor. Both interfaces are version-dependent; keep compatibility tests pinned to the deployed Langfuse version.
+
+## Data contract and evidence classes
+
+Use versioned records with `schema_version`, source and source version, observation window and timezone, computation time, scope/filters, coverage, and links/identifiers only when explicitly requested. Never emit prompt, output, error message, command arguments, paths, or reasoning by default. Names and IDs can themselves be sensitive; protect generated reports. Derived records should carry source observation references when explicitly exported, transform/evaluator version, evidence class and a reason for `unknown`.
+
+* **Observed:** directly recorded events, timestamps, tool/model names, reported tokens, reported ERROR levels. Preserve original semantics and provenance.
+* **Derived:** deterministic counts, percentiles, trace ancestry, repeated-call candidates and measured overlaps. Publish denominator, population, window and missing/duplicate/ambiguous coverage. A correlation is not a cause.
+* **Judged:** explicit model/human assessments, with rubric/version/model, evidence references, uncertainty and `unknown`. Keep these separate from observed values.
+* **Unavailable:** not instrumented, truncated, unsampled, inaccessible, unmatched or still running. Represent as unknown, not zero/success. Distinguish genuinely measured zero from unavailable.
+
+Identifiers form a hierarchy only when supported by evidence: project -> session -> turn -> generation/tool/event; parent session and child turn links must come from actual source relationships. Associate a child with the nearest observed parent turn in the same trace; never silently assign orphan/cross-boundary spans. Deduplicate observations by stable source identity, handle late data and cycles, and show unmatched counts. Include a `from`-inclusive/`to`-exclusive UTC window and explain that selecting observations by start time can exclude a parent or child crossing the boundary. Do not add provider token subfields together if their semantics overlap; use the reported total and show per-field coverage.
+
+## Insight and visualization map
+
+The following is the target inventory. Items requiring new data or validation remain unavailable until their phase lands; a dashboard must not show a placeholder as measured fact.
+
+| Area | Measure / dimensions / visualization | Evidence and constraints |
+| --- | --- | --- |
+| Volume and trajectory | Root prompt turns and trends by day/week; per-turn ordered generation/tool timeline and trace drilldown; session and child-session relationships | Observed where complete, derived from parent links; disclose unlinked and incomplete windows. Do not call turns epics/tasks. |
+| Completion and quality | Explicit execution outcomes; task definition quality, acceptance criteria, completion, validation, satisfaction and rework by task/category | Runtime outcomes require new event correlation; satisfaction requires human feedback or a separately labelled evaluated judgment. Keep `blocked`, `interrupted`, `failed`, `completed`, `unknown` distinct. |
+| Failures and recovery | Counts/rates and time series of explicitly errored turns, generations and tools; retry/fallback/recovery sequences and sources | Existing error counts are lower bounds, not the inverse of success. New event instrumentation needed for confirmed fallback/recovery and cause. Category examples: model/provider, tool, permission/human, dependency/service, context, harness/configuration, data, unknown. |
+| Time and bottlenecks | Turn p50/p95, generation and tool latency distribution by name/model, slowest calls, temporal heatmap | Latency is elapsed wall time, not active work. Sum of overlapping tool durations is not critical-path time. Attribution to human, services, model or avoidable waits requires explicit intervals. |
+| Tool effectiveness | Tool call count, error counts, p50/p95, total elapsed by tool, repeated sequences and suspected cycles | Native project-wide charts are not necessarily OpenCode-only. Repetition can be valid; label heuristics as candidates and preserve sample/evidence. Do not label a slow or repeated tool inherently wrong. |
+| Tokens and context | Reported generation input/output/total and cache by model, day/week, session and evidenced task hierarchy; context capacity, occupancy and compaction timing/outcomes | Include coverage and provider semantics. Current Langfuse totals are generation-level; context window and compaction quality/timing require compatible new telemetry. Avoid double counting nested tokens. |
+| Delegation and services | Parent/child sessions, duration, model/tool usage, outcome, parallel overlap, service/tool/MCP dependency | Requires stable link and attribution; do not add child usage twice or infer unseen external costs. |
+| AI improvement | Searchable issue/category/trajectory evidence, coverage dashboard, versioned structured JSON, optional local-model judgments and human review queue | No raw payload by default. Evaluator labels must include `unknown`, provenance, sampling, confidence calibration and evidence, not authoritative root causes. |
+
+### Dashboard organization
+
+1. **OpenCode operations:** root prompt-turn volume/trend, explicit turn errors, turn duration, generation counts/errors/retries. Link to the Langfuse trace view. State that completion/success/blocked is not measured by this view.
+2. **Models and tools:** generation volume, latency percentiles and reported tokens by model/time; project-wide tool volume, error levels and latency by tool, prominently labelled as project-wide. Add filters for time, environment, model and level where supported. Avoid unsupported cross-view filters and high-cardinality widgets.
+3. **Coverage and AI exploration:** bounded, machine-readable report of matched/unmatched turns, tools and generations, token availability and anomaly candidates. Link to private trace evidence only on explicit request. Future dashboards cover task quality, delegation, context/compaction and root causes once the required fields exist.
+
+Charts should show count and denominator together where a rate is used; p50/p95 with sample count rather than average alone; and window, freshness, coverage and timezone. Drilldowns should retain the applicable filters. Missing/low coverage is visible, not silently suppressed.
+
+## Enrichment design
+
+Start with deterministic structural measurements; then add narrowly scoped local evaluations. A task-level evaluation needs bounded, selected evidence rather than entire unbounded sessions: task statement, final response, verified checks, relevant failures and a small timeline. Fields include task-type, clarity, outcome, blocker type/source, evidence, quality/rework/recovery candidates and `unknown`. Keep observed error and human outcome separate from estimated cause or satisfaction. Treat all trace text as untrusted data; never execute it or allow it to change the rubric. Require strict schema/category validation, conservative truncation with a coverage flag, a maximum input/token/time/run budget, and a reproducible labeled synthetic evaluation set. Validate agreement and abstention against human-labeled examples before using a rubric in dashboards.
+
+Default to no new real-data LLM calls and no historical backfill. A real-content evaluation must be explicitly selected and bounded by the operator, verify local model availability, local Docker connection and LM Link/network routing immediately before sending, and make the data disclosure clear; credentials and raw evidence must not appear in logs. A schedule is an explicit operator-owned opt-in, disabled by default, with non-overlap, bounded windows, idempotency keys `(source, evaluator, rubric version)`, checkpoints, retry/backoff and a dead-letter/health indicator. Do not re-run or overwrite human annotations when a model or rubric changes. Inference outage must leave data `unevaluated`, not failed/successful.
+
+## Sequenced execution and acceptance gates
+
+Dependencies run top to bottom; a later stage may not claim data that an earlier stage does not produce.
+
+1. **Inventory and specification:** audit actual producers and schemas without displaying payloads; define the units, gaps, privacy boundary and plan above. Review each proposed metric for source, scope, denominator, missingness and leakage.
+2. **Measured foundations:** provision separately owned, code-defined native dashboards from verified queries; preserve the existing demo and unrelated resources, detect UI drift and uncertain writes. Provide bounded, read-only versioned JSON reporting with safe field selection, pagination, deterministic ancestry and quality counters. No LLM calls. Test synthetic mixed emitters, parent gaps, boundary crossings, pagination, duplicates and missing token fields.
+3. **Richer event instrumentation:** add narrowly scoped, versioned OpenCode events for execution success/interruption/failure, retry, permission waits, compaction, delegation and explicit task links where hooks support them. Prove correlation and preservation across reloads, concurrent locations, dropped events, child sessions and retries using isolated fake-model collectors; do not alter agent behavior. This phase must expose coverage and version and be independently reversible.
+4. **Task and outcome evidence:** accept explicit task/epic/subtask links and human/automated check outcomes with provenance and privacy controls. Define success and block rates only over known outcomes; separately count unknowns, interruptions and unvalidated completions. Add relevant views and drilldowns.
+5. **Trajectory and efficiency:** compute bounded sequence/cycle candidates, interval unions, critical-path candidates, rework and recovery from reliable links. Validate against synthetic parallel, repeated-but-valid, failed/recovered and incomplete trajectories; report evidence and uncertainty. Distinguish unattributed gaps from proven waits.
+6. **Local-model enrichment:** implement the opt-in bounded judge workflow above, a labeled synthetic dataset and evaluation/abstention thresholds; surface separate assessment scores, coverage and provenance. No global evaluation rule or implicit historical processing.
+7. **Operationalize:** documented one-shot and optional schedule, versioned run/checkpoint metadata, resource and privacy budgets, late-data/idempotency policy, accessible human views and AI schema, disaster/recovery instructions consistent with existing manual backups. Synthetic end-to-end test plus safe live metadata/aggregate smoke; full lint/tests/build and review before each high-risk delivery.
+
+## Review and success criteria
+
+Review for source ambiguity, cross-project contamination, missing-vs-zero, nested/double-counted usage, concurrency/late data, unsupported API assumptions, leakage, unstable ownership, failure recovery and misleading labels. A phase is done only when synthetic tests cover its negative paths, a real read-only or isolated smoke proves the integration, its coverage/limitations are documented, and no unrelated data or settings were changed. Overall completion requires all requested insights either implemented with evidence or explicitly identified as unavailable with a concrete instrumentation and validation path; a demo score is not a production-quality assessment.

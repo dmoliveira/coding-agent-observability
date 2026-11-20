@@ -42,7 +42,7 @@ after(async () => {
 
 test("builds only the intended public files and is repeatable", async () => {
   assert.deepEqual(await files(output), [
-    "assets/mark.svg", "assets/observatory-hero.png", "assets/site.css", "guide/index.html",
+    "agent-observability/index.html", "assets/mark.svg", "assets/observatory-hero.png", "assets/site.css", "guide/index.html",
     "index.html", "licenses/index.html", "opencode/index.html", "robots.txt", "security/index.html", "sitemap.xml",
   ]);
   const before = await readFile(path.join(output, "guide/index.html"), "utf8");

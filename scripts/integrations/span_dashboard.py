@@ -107,7 +107,11 @@ class Client:
 
 
 def kind_for(key: str) -> str:
-    return "widget" if key.startswith("widget:") else key
+    if key.startswith("widget:"):
+        return "widget"
+    if key.startswith("dashboard:"):
+        return "dashboard"
+    return key
 
 
 def projection(kind: str, value: dict[str, Any]) -> dict[str, Any]:
@@ -126,10 +130,12 @@ def fingerprint(kind: str, value: dict[str, Any]) -> str:
     ).hexdigest()
 
 
-def read_state() -> tuple[dict[str, Any] | None, bytes | None]:
+def read_state(
+    state_name: str = STATE_NAME,
+) -> tuple[dict[str, Any] | None, bytes | None]:
     try:
         fd = os.open(
-            common.ROOT / STATE_NAME, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            common.ROOT / state_name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
         )
     except FileNotFoundError:
         return None, None
@@ -175,13 +181,15 @@ def read_state() -> tuple[dict[str, Any] | None, bytes | None]:
     return data, raw
 
 
-def save_state(state: dict[str, Any], previous: bytes | None) -> bytes:
-    path = common.ROOT / STATE_NAME
+def save_state(
+    state: dict[str, Any], previous: bytes | None, state_name: str = STATE_NAME
+) -> bytes:
+    path = common.ROOT / state_name
     content = (json.dumps(state, sort_keys=True) + "\n").encode()
     if previous is None:
         write_new(path, content.decode())
         return content
-    _, actual = read_state()
+    _, actual = read_state(state_name)
     if actual != previous:
         raise ValueError(
             "Dashboard state changed concurrently; it was not overwritten."
@@ -190,7 +198,7 @@ def save_state(state: dict[str, Any], previous: bytes | None) -> bytes:
     try:
         with os.fdopen(fd, "wb") as stream:
             stream.write(content)
-        _, actual = read_state()
+        _, actual = read_state(state_name)
         if actual != previous:
             raise ValueError(
                 "Dashboard state changed concurrently; it was not overwritten."
@@ -227,13 +235,14 @@ def ensure_resource(
     existing: dict[str, dict[str, Any]],
     key: str,
     desired: dict[str, Any],
+    state_name: str = STATE_NAME,
 ) -> tuple[dict[str, Any], bytes]:
     kind = kind_for(key)
     current = existing.get(key)
     if current is not None and projection(kind, current) == desired:
         return current, raw
     state["pending"] = key
-    raw = save_state(state, raw)
+    raw = save_state(state, raw, state_name)
     path = PATHS[kind] + (f"/{current['id']}" if current is not None else "")
     result = client.request("PATCH" if current is not None else "POST", path, desired)
     if current is not None and result.get("id") != current["id"]:
@@ -245,7 +254,7 @@ def ensure_resource(
         "fingerprint": fingerprint(kind, result),
     }
     state["pending"] = None
-    raw = save_state(state, raw)
+    raw = save_state(state, raw, state_name)
     if projection(kind, result) != desired:
         raise ValueError(
             f"Langfuse normalized the {kind} unexpectedly; inspect it before retrying."

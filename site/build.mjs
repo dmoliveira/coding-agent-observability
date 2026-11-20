@@ -13,6 +13,7 @@ const repository = "https://github.com/dmoliveira/coding-agent-observability";
 const pages = [
   { slug: "guide", label: "Getting started", title: "Get started", description: "Install the local stack, connect OpenCode, and manage sharing and backups.", source: "README.md" },
   { slug: "opencode", label: "OpenCode tracing", title: "OpenCode tracing", description: "Understand the integration, its coverage, credentials, and opt-out.", source: "docs/opencode.md" },
+  { slug: "agent-observability", label: "Agent observability", title: "Agent observability", description: "Explore measured dashboards, structural reports, coverage, and privacy limits.", source: "docs/agent-observability.md" },
   { slug: "security", label: "Security & privacy", title: "Security & privacy", description: "Know the boundaries around your traces, network access, and backups.", source: "docs/security.md" },
   { slug: "licenses", label: "Third-party notices", title: "Third-party notices", description: "Attribution and licenses for the projects this stack builds upon.", source: "THIRD_PARTY_NOTICES.md" },
 ];
@@ -51,6 +52,7 @@ function rewriteLink(href) {
   const targets = {
     "README.md": "../guide/",
     "docs/opencode.md": "../opencode/", "opencode.md": "../opencode/",
+    "docs/agent-observability.md": "../agent-observability/", "agent-observability.md": "../agent-observability/", "../README.md": "../guide/",
     "docs/security.md": "../security/", "security.md": "../security/",
     "THIRD_PARTY_NOTICES.md": "../licenses/",
   };

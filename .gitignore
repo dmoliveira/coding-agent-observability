@@ -6,6 +6,7 @@
 .ai-observatory.lmstudio
 .ai-observatory.lmstudio-state.json
 .ai-observatory.span-dashboard-state.json
+.ai-observatory.agent-dashboard-state.json
 backups/
 __pycache__/
 .pytest_cache/
