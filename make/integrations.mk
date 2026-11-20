@@ -3,7 +3,7 @@
 connect-opencode-global: ## Enable default-on OpenCode tracing for this user
 	@$(PYTHON) scripts/integrations/opencode_global.py
 
-connect-opencode-events: ## Enable separate structural execution/compaction events
+connect-opencode-events: ## Enable separate structural runtime events
 	@$(PYTHON) scripts/integrations/opencode_events.py connect
 
 disconnect-opencode-events: ## Disable only the owned structural event plugin

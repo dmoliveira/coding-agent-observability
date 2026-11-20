@@ -553,6 +553,58 @@ class ReportTests(unittest.TestCase):
             value["linked_generations"]["reported_tokens"]["input"]["sum"], 100
         )
 
+    def test_permission_waits_require_unique_same_session_ordered_events(self) -> None:
+        environment = agent_dashboard_definition.RUNTIME_ENVIRONMENT
+
+        def event(identifier: str, trace: str, name: str, **fields: object) -> dict:
+            return report.select(
+                observation(
+                    identifier,
+                    name,
+                    "EVENT",
+                    traceId=trace,
+                    environment=environment,
+                    **fields,
+                )
+            )
+
+        ask = "aiobs.permission.asked"
+        reply = "aiobs.permission.replied.once"
+        rows = [
+            event("a", "good", ask, startTime="2026-11-20T00:00:00Z"),
+            event("b", "good", reply, startTime="2026-11-20T00:01:00Z"),
+            event("c", "open", ask),
+            event("d", "late", reply),
+            event("e", "duplicate", ask),
+            event("f", "duplicate", ask),
+            event("g", "duplicate", reply),
+            event("h", "wrong-session", ask),
+            event("i", "wrong-session", reply, sessionId="other-session"),
+            event("j", "bad-time", ask, startTime=None),
+            event("k", "bad-time", reply),
+            event("l", "negative", ask, startTime="2026-11-20T00:02:00Z"),
+            event("m", "negative", reply, startTime="2026-11-20T00:01:00Z"),
+            report.select(
+                observation(
+                    "foreign", ask, "EVENT", traceId="foreign", environment="other"
+                )
+            ),
+        ]
+        result = report.build_report(rows, self.start, self.end)["runtime_events"][
+            "permission_waits"
+        ]
+        self.assertEqual(result["matched_pairs"], 1)
+        self.assertEqual(
+            result["matched_wait_seconds"], {"count": 1, "p50": 60, "p95": 60}
+        )
+        self.assertEqual(result["ask_without_reply"], 1)
+        self.assertEqual(result["reply_without_ask"], 1)
+        self.assertEqual(result["ambiguous_groups"], 1)
+        self.assertEqual(result["missing_or_mismatched_session"], 1)
+        self.assertEqual(result["invalid_timestamps"], 1)
+        self.assertEqual(result["reply_before_ask"], 1)
+        self.assertEqual(result["request_groups"], 7)
+
 
 if __name__ == "__main__":
     unittest.main()

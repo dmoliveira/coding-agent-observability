@@ -31,6 +31,11 @@ INTERRUPTED = [
     f"aiobs.execution.interrupted.{reason}"
     for reason in ("user", "shutdown", "superseded", "inactivity", "unknown")
 ]
+PERMISSION_ASK = "aiobs.permission.asked"
+PERMISSION_REPLIES = [
+    f"aiobs.permission.replied.{reply}"
+    for reply in ("once", "always", "reject", "unknown")
+]
 COMPACTION = {
     action: [
         f"aiobs.compaction.{action}.{reason}"
@@ -135,6 +140,18 @@ def definitions() -> dict[str, dict[str, Any]]:
                     ],
                     "outputTokens",
                     "sum",
+                ),
+                "permission_asked": widget(
+                    "Recorded permission requests",
+                    "Ask events only; capture may be incomplete. See the structural report for matched wait durations.",
+                    [*RUNTIME, options("name", PERMISSION_ASK)],
+                ),
+                "permission_replies": widget(
+                    "Recorded permission replies",
+                    "Replies may have no observed ask; approval is not task success.",
+                    [*RUNTIME, options("name", *PERMISSION_REPLIES)],
+                    dimension="name",
+                    chart="HORIZONTAL_BAR",
                 ),
                 "outcome_trend": widget(
                     "Recorded busy-period outcomes over time",
