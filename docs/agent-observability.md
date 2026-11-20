@@ -69,6 +69,33 @@ The report also counts **candidates** where the same tool name appears three tim
 
 The API field selection excludes `io` and `metadata`; the API's `basic` group may include a status message, which the report discards without emitting it. Tool/model names, counts, time ranges and optional IDs can still be sensitive. Reports print to stdout: do not paste them into a public issue, chat, or AI system without review. If saving one, set a restrictive `umask`, choose a private location, and protect and delete the file according to your data policy. The script never creates an output file or schedules itself. For a recurring job, explicitly configure your scheduler with a bounded time window, non-overlap, private output permissions and appropriate retention; do not schedule model evaluations merely by scheduling this report.
 
+### Optional explicit task attestations
+
+Task outcomes and epic/turn links are not available from the runtime events. To report **claims explicitly provided by an operator**, create a private, current-user-owned mode-600 JSON file, for example:
+
+```json
+{
+  "schema_version": "1.0",
+  "as_of": "2026-11-20T12:00:00Z",
+  "tasks": [
+    {"id": "example_epic", "kind": "epic", "parent_id": null, "status": "in_progress", "validation": "unknown", "attested_by": "human", "bindings": []},
+    {"id": "example_task", "kind": "task", "parent_id": "example_epic", "status": "completed", "validation": "passed", "attested_by": "agent", "bindings": [{"trace_id": "example_trace", "turn_id": "example_turn"}]}
+  ]
+}
+```
+
+Replace example IDs with opaque IDs you explicitly intend to use; trace and turn IDs can be found in a private `--include-identifiers` report. Never put task text, paths, commands, personal information or secrets in IDs. `as_of` must be an ISO timestamp with seconds, up to six fractional digits and `Z` or a numeric `±HH:MM` offset; output is normalized to UTC. Every task has exactly the fields shown. `kind` is `epic`, `task` or `subtask`; `status` is `not_started`, `in_progress`, `completed`, `blocked`, `failed`, `interrupted`, `canceled` or `unknown`; `validation` is `passed`, `failed`, `not_run` or `unknown`; `attested_by` is `human`, `agent`, `automation` or `unknown` and applies to the whole record. Use `unknown` where there is no evidence. IDs contain 1–160 ASCII letters, digits, `_` or `-`. A snapshot can contain at most 1,000 records, 16 exact turn bindings per record and 1 MiB. Parent IDs outside the snapshot are allowed and counted; duplicate IDs, cyclic parents, duplicate bindings within a record, unknown fields and duplicate JSON keys are rejected.
+
+Select the file only when desired:
+
+```sh
+python3 scripts/integrations/agent_report.py --task-evidence /private/path/tasks.json
+```
+
+The separate `task_attestations` section reports counts by kind, status, validation and attestor, plus binding coverage. These are **attested claims, not independently verified outcomes**: a record marked completed and passed is not a verified success. Counts include epics, tasks and subtasks; use the by-kind breakdown rather than summing hierarchies. The snapshot is as of its own timestamp and is not filtered by the observation time window or `--session-id`; those filters apply only when looking for explicitly bound turns. A binding matches only an existing OpenCode turn with the same trace and observation IDs. An absent match may be outside the window or session; a turn claimed by multiple tasks is ambiguous, not attributed. The report does not roll up or assign tokens to these tasks. `--include-identifiers` additionally includes the task records and binding match states; protect that output.
+
+The report never discovers such files, writes them, sends them to Langfuse or an LLM, or schedules processing. Selecting a file authorizes only that one read; the file and output remain the operator's responsibility. The existing unknown-outcome caveats remain valid for runtime observations even when attestations are supplied.
+
 ## Optional local-model judgments
 
 On macOS with LM Studio running on `127.0.0.1:1234` and LM Link offline, try three **synthetic** cases using the same default local model as the existing demo:

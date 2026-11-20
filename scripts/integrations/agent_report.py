@@ -16,7 +16,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from integrations import agent_dashboard_definition as dashboard_spec
-from integrations import span_dashboard
+from integrations import span_dashboard, task_evidence
 
 UTC = dt.timezone.utc
 FIELDS = "basic,model,usage,metrics"
@@ -422,6 +422,7 @@ def build_report(
     duplicates: int = 0,
     include_identifiers: bool = False,
     session_scoped: bool = False,
+    task_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     index = {(row["traceId"], row["id"]): row for row in rows}
     turns = [row for row in rows if kind(row) == "turn"]
@@ -671,6 +672,12 @@ def build_report(
             "context_and_compaction_quality": "Context capacity and compaction quality are not available here.",
         },
     }
+    if task_snapshot is not None:
+        report["task_attestations"] = task_evidence.summarize(
+            task_snapshot,
+            {(turn["traceId"], turn["id"]) for turn in turns},
+            include_identifiers,
+        )
     if include_identifiers:
         details = []
         sessions: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -759,6 +766,11 @@ def main(argv: list[str] | None = None) -> None:
         "--session-id",
         help="Restrict the scan to one session; child sessions are not included",
     )
+    parser.add_argument(
+        "--task-evidence",
+        type=Path,
+        help="Read an explicitly selected private JSON task-attestation snapshot",
+    )
     args = parser.parse_args(argv)
     end = timestamp(args.to_time) if args.to_time else dt.datetime.now(UTC)
     start = timestamp(args.from_time) if args.from_time else end - dt.timedelta(days=7)
@@ -766,6 +778,9 @@ def main(argv: list[str] | None = None) -> None:
         raise ValueError("The time window must be positive and at most 90 days.")
     if not 1 <= args.max_observations <= 100000:
         raise ValueError("The observation limit must be between 1 and 100000.")
+    snapshot = (
+        task_evidence.read_file(args.task_evidence) if args.task_evidence else None
+    )
     # The credential helper may print a non-secret diagnostic; keep stdout JSON-only.
     with contextlib.redirect_stdout(sys.stderr):
         client, _, _ = span_dashboard.context()
@@ -781,6 +796,7 @@ def main(argv: list[str] | None = None) -> None:
                 duplicates,
                 args.include_identifiers,
                 session_scoped=args.session_id is not None,
+                task_snapshot=snapshot,
             ),
             indent=2,
             allow_nan=False,
