@@ -1,7 +1,13 @@
-.PHONY: connect-opencode-global connect-opencode run-opencode env-opencode tailscale-on tailscale-off lmstudio-models connect-lmstudio sync-lmstudio-models span-dashboard span-dashboard-demo agent-dashboards agent-report agent-eval-demo
+.PHONY: connect-opencode-global connect-opencode-events disconnect-opencode-events connect-opencode run-opencode env-opencode tailscale-on tailscale-off lmstudio-models connect-lmstudio sync-lmstudio-models span-dashboard span-dashboard-demo agent-dashboards agent-report agent-eval-demo
 
 connect-opencode-global: ## Enable default-on OpenCode tracing for this user
 	@$(PYTHON) scripts/integrations/opencode_global.py
+
+connect-opencode-events: ## Enable separate structural execution/compaction events
+	@$(PYTHON) scripts/integrations/opencode_events.py connect
+
+disconnect-opencode-events: ## Disable only the owned structural event plugin
+	@$(PYTHON) scripts/integrations/opencode_events.py disconnect
 
 export PROJECT
 connect-opencode: ## Enable the official OpenCode plugin for PROJECT=/path
