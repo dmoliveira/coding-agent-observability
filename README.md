@@ -119,6 +119,8 @@ make agent-report      # structural, machine-readable JSON for the last seven da
 
 The dashboards show recorded OpenCode prompt turns and model activity, alongside clearly labelled **project-wide** tool metrics. Optionally, `make connect-opencode-events` adds structural busy-period, compaction and permission events for future work; these are not per-task outcomes and can be lost. The report joins available observations to their nearest recorded OpenCode turn and reports missing coverage. A turn ending is not proof of task success, and tool charts can include other integrations. Tool/model names and optional trace IDs can be sensitive; see the [agent observability guide](docs/agent-observability.md) for interpretation, privacy, windows and future phases. Neither dashboard/report command runs an evaluator or reads observation input/output.
 
+The report can optionally read a selected private task-attestation file with explicit task/epic links, outcome claims and exact turn IDs. These claims remain distinct from measured runtime facts; see the guide for the file format and limits.
+
 For an optional local-model task-assessment example, `make agent-eval-demo` judges three synthetic cases. Its labels are **unverified judgments**, not facts or reliable success decisions. The guide describes explicit, bounded evaluation of selected evidence; nothing is backfilled or scheduled automatically.
 
 ## 🧪 Evaluate with local LM Studio models
