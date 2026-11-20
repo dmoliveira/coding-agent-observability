@@ -42,6 +42,8 @@ RUNTIME_NAMES = {
     "aiobs.execution.failed",
     *dashboard_spec.INTERRUPTED,
     *(name for names in dashboard_spec.COMPACTION.values() for name in names),
+    dashboard_spec.PERMISSION_ASK,
+    *dashboard_spec.PERMISSION_REPLIES,
 }
 
 
@@ -223,6 +225,76 @@ def usage_summary(
             "missing": len(rows) - len(values),
         }
     return result
+
+
+def permission_wait_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Pair only one ask and one reply sharing the explicit request trace and session."""
+    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        if (
+            row["name"] == dashboard_spec.PERMISSION_ASK
+            or row["name"] in dashboard_spec.PERMISSION_REPLIES
+        ):
+            groups[row["traceId"]].append(row)
+    counts: Counter[str] = Counter()
+    durations = []
+    for group in groups.values():
+        asks = [row for row in group if row["name"] == dashboard_spec.PERMISSION_ASK]
+        replies = [
+            row for row in group if row["name"] in dashboard_spec.PERMISSION_REPLIES
+        ]
+        if len(asks) > 1 or len(replies) > 1:
+            counts["ambiguous_groups"] += 1
+        elif not asks:
+            counts["reply_without_ask"] += 1
+        elif not replies:
+            counts["ask_without_reply"] += 1
+        elif not asks[0].get("sessionId") or asks[0].get("sessionId") != replies[0].get(
+            "sessionId"
+        ):
+            counts["missing_or_mismatched_session"] += 1
+        else:
+            try:
+                seconds = (
+                    timestamp(replies[0].get("startTime"))
+                    - timestamp(asks[0].get("startTime"))
+                ).total_seconds()
+            except ValueError:
+                counts["invalid_timestamps"] += 1
+                continue
+            if seconds < 0:
+                counts["reply_before_ask"] += 1
+            else:
+                counts["matched_pairs"] += 1
+                durations.append(seconds)
+    return {
+        "ask_observations": sum(
+            row["name"] == dashboard_spec.PERMISSION_ASK for row in rows
+        ),
+        "reply_observations": sum(
+            row["name"] in dashboard_spec.PERMISSION_REPLIES for row in rows
+        ),
+        "request_groups": len(groups),
+        **{
+            key: counts[key]
+            for key in (
+                "matched_pairs",
+                "ask_without_reply",
+                "reply_without_ask",
+                "ambiguous_groups",
+                "missing_or_mismatched_session",
+                "invalid_timestamps",
+                "reply_before_ask",
+            )
+        },
+        "matched_wait_seconds": {
+            "count": len(durations),
+            "p50": percentile(durations, 0.5),
+            "p95": percentile(durations, 0.95),
+        },
+        "coverage": "unknown; missing events, time-window boundaries and uncaptured requests are not measured",
+        "interpretation": "Elapsed time from observed ask to reply, not active work or task outcome.",
+    }
 
 
 def group_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -558,8 +630,9 @@ def build_report(
                 compaction_events,
                 ("input", "output", "reasoning", "cache_read", "cache_write"),
             ),
+            "permission_waits": permission_wait_summary(runtime_events),
             "coverage": "unknown; opt-in live capture may be disabled, interrupted or lose events",
-            "scope": "session busy periods and compaction; not prompt or task outcomes",
+            "scope": "session busy periods, compaction and permission requests; not prompt or task outcomes",
         },
         "tool_sequence_candidates": {
             "description": "Name-only sequences ordered by start time; inputs, causality, concurrency and correctness are not established.",

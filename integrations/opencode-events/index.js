@@ -11,9 +11,11 @@ const environment = "ai-observatory-opencode-events";
 const types = [
   "session.execution.started", "session.execution.succeeded", "session.execution.failed", "session.execution.interrupted",
   "session.compaction.started", "session.compaction.ended", "session.compaction.failed",
+  "permission.asked", "permission.replied",
 ];
 const seenKey = Symbol.for("ai-observatory.structural-events.seen.v1");
 const identifier = /^[A-Za-z0-9_-]{1,160}$/;
+const permissionIdentifier = /^per[A-Za-z0-9_-]{1,157}$/;
 const hash = (value) => createHash("sha256").update(value).digest("hex");
 const attribute = (key, value) => ({ key, value: { stringValue: value } });
 
@@ -52,6 +54,16 @@ export function encodeEvent(event) {
   if (typeof session !== "string" || !identifier.test(session)) return null;
   if (!Number.isSafeInteger(event.created) || event.created <= 0) return null;
   let name = event.type.replace("session.", "aiobs.");
+  let permission;
+  if (event.type === "permission.asked" || event.type === "permission.replied") {
+    permission = event.type === "permission.asked" ? event.data?.id : event.data?.requestID;
+    if (typeof permission !== "string" || !permissionIdentifier.test(permission)) return null;
+    name = event.type.replace("permission.", "aiobs.permission.");
+    if (event.type === "permission.replied") {
+      const reply = event.data?.reply;
+      name += "." + (["once", "always", "reject"].includes(reply) ? reply : "unknown");
+    }
+  }
   if (event.type === "session.execution.interrupted") {
     const reason = event.data?.reason;
     name += "." + (["user", "shutdown", "superseded", "inactivity"].includes(reason) ? reason : "unknown");
@@ -60,7 +72,9 @@ export function encodeEvent(event) {
     const reason = event.data?.reason;
     name += "." + (["auto", "manual"].includes(reason) ? reason : "unknown");
   }
-  const traceId = hash(`aiobs.structural.trace.v1:${event.id}`).slice(0, 32);
+  const traceId = hash(permission === undefined
+    ? `aiobs.structural.trace.v1:${event.id}`
+    : `aiobs.permission.trace.v1:${session}:${permission}`).slice(0, 32);
   const spanId = hash(`aiobs.structural.span.v1:${event.id}`).slice(0, 16);
   if (/^0+$/.test(traceId) || /^0+$/.test(spanId)) return null;
   const nanos = String(BigInt(event.created) * 1_000_000n);

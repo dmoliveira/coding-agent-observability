@@ -421,8 +421,79 @@ export default { id: "aiobs.sandbox.probe", setup(ctx) {
             "compaction token counts were not preserved"
         )
         assert "AI-OBS-SYNTHETIC-SESSION" not in json.dumps(compact_spans)
+        # Create and reply to a real permission request in the isolated server.
+        auth = "Basic " + base64.b64encode(b"opencode:sandbox-password").decode()
+
+        def api_json(path, method, payload):
+            req = urllib.request.Request(
+                url + path,
+                method=method,
+                data=json.dumps(payload).encode(),
+                headers={"Authorization": auth, "Content-Type": "application/json"},
+            )
+            with opener.open(req, timeout=30) as response:
+                raw = response.read()
+                return json.loads(raw) if raw else {}
+
+        sid = session_ids["A"]
+        api_json(
+            f"/api/session/{sid}",
+            "PATCH",
+            {
+                "permissions": [
+                    {
+                        "action": "SYNTHETIC_PERMISSION_ACTION",
+                        "resource": "*",
+                        "effect": "ask",
+                    }
+                ]
+            },
+        )
+        request_id = "per_synthetic_private"
+        response = api_json(
+            f"/api/session/{sid}/permission",
+            "POST",
+            {
+                "id": request_id,
+                "action": "SYNTHETIC_PERMISSION_ACTION",
+                "resources": ["SYNTHETIC_PERMISSION_PATH"],
+                "metadata": {"secret": "SYNTHETIC_PERMISSION_METADATA"},
+            },
+        )
+        assert response["data"]["effect"] == "ask"
+        api_json(
+            f"/api/session/{sid}/permission/{request_id}/reply",
+            "POST",
+            {"decision": "once", "message": "SYNTHETIC_PERMISSION_FEEDBACK"},
+        )
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            permission_spans = [
+                s for s in readspans() if s["name"].startswith("aiobs.permission.")
+            ]
+            if {s["name"] for s in permission_spans} >= {
+                "aiobs.permission.asked",
+                "aiobs.permission.replied.once",
+            }:
+                break
+            time.sleep(0.1)
+        else:
+            raise AssertionError("isolated permission ask/reply events not captured")
+        asked = next(
+            s for s in permission_spans if s["name"] == "aiobs.permission.asked"
+        )
+        replied = next(
+            s for s in permission_spans if s["name"] == "aiobs.permission.replied.once"
+        )
+        assert (
+            asked["traceId"] == replied["traceId"]
+            and asked["spanId"] != replied["spanId"]
+        )
+        assert int(replied["startTimeUnixNano"]) >= int(asked["startTimeUnixNano"])
+        assert "SYNTHETIC_PERMISSION_" not in json.dumps(permission_spans)
+        assert request_id not in json.dumps(permission_spans)
         print(
-            "PASS: two locations, in-flight reload, execution events and content-free manual compaction usage"
+            "PASS: two locations, reload, compaction usage and content-free permission ask/reply correlation"
         )
 finally:
     Model.release.set()

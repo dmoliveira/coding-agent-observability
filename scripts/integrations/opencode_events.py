@@ -288,7 +288,7 @@ def connect() -> None:
         "OpenCode structural event capture is installed; a watched server may load it immediately."
     )
     print(
-        "Only execution/compaction lifecycle metadata is sent; task success is not inferred."
+        "Only execution, compaction and permission lifecycle metadata is sent; task success is not inferred."
     )
     print(
         "Events can be lost during disconnects or restarts; no historical backfill is performed."

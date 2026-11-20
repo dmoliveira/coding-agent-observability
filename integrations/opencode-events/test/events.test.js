@@ -74,6 +74,27 @@ test("private destinations require exact loopback or HTTPS tailnet origin", () =
   }
 });
 
+test("permission asks and replies share only an opaque session-scoped trace", () => {
+  const asked = { ...base, id: "evt_permission_ask", type: "permission.asked",
+    data: { sessionID: "ses_synthetic", id: "per_synthetic", action: "SYNTHETIC_SECRET",
+      resources: ["SYNTHETIC_SECRET"], message: "SYNTHETIC_SECRET", metadata: { text: "SYNTHETIC_SECRET" } } };
+  const replied = { ...base, id: "evt_permission_reply", type: "permission.replied",
+    data: { sessionID: "ses_synthetic", requestID: "per_synthetic", reply: "once", feedback: "SYNTHETIC_SECRET" } };
+  const first = encodeEvent(asked);
+  const second = encodeEvent(replied);
+  const a = first.resourceSpans[0].scopeSpans[0].spans[0];
+  const b = second.resourceSpans[0].scopeSpans[0].spans[0];
+  assert.equal(a.name, "aiobs.permission.asked");
+  assert.equal(b.name, "aiobs.permission.replied.once");
+  assert.equal(a.traceId, b.traceId);
+  assert.notEqual(a.spanId, b.spanId);
+  assert.doesNotMatch(JSON.stringify([first, second]), /SYNTHETIC_SECRET|per_synthetic/);
+  assert.notEqual(encodeEvent({ ...asked, data: { ...asked.data, sessionID: "ses_other" } }).resourceSpans[0].scopeSpans[0].spans[0].traceId, a.traceId);
+  assert.equal(encodeEvent({ ...asked, data: { ...asked.data, id: "invalid/path" } }), null);
+  assert.equal(encodeEvent({ ...replied, data: { ...replied.data, requestID: undefined } }), null);
+  assert.equal(encodeEvent({ ...replied, data: { ...replied.data, reply: "SYNTHETIC_SECRET" } }).resourceSpans[0].scopeSpans[0].spans[0].name, "aiobs.permission.replied.unknown");
+});
+
 test("event subscription filters location and deduplicates across plugin instances", async (t) => {
   delete globalThis[seenKey];
   const requests = [];
