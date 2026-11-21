@@ -137,6 +137,8 @@ class DashboardTests(unittest.TestCase):
             },
             "performance": {
                 "tokens_trend": "LINE_TIME_SERIES",
+                "input_tokens_trend": "LINE_TIME_SERIES",
+                "output_tokens_trend": "LINE_TIME_SERIES",
                 "cost_trend": "LINE_TIME_SERIES",
                 "tool_trend": "LINE_TIME_SERIES",
                 "tool_error_trend": "BAR_TIME_SERIES",
@@ -187,6 +189,43 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(
                 latency_trend["metrics"], [{"measure": "latency", "agg": "p95"}]
             )
+
+    def test_token_mix_widgets_use_langfuse_v2_generation_measures(self) -> None:
+        # Pinned to langfuse/langfuse v4.82.0, packages/shared/src/features/query/
+        # dataModel.ts: viewDeclarations.v2.observations (eventsObservationsView).
+        supported_v2_measures = {"inputTokens", "outputTokens"}
+        widgets = agent_dashboard_definition.definitions()["performance"]["widgets"]
+        expected = {
+            "model_input_tokens": (
+                "inputTokens",
+                "providedModelName",
+                "HORIZONTAL_BAR",
+            ),
+            "model_output_tokens": (
+                "outputTokens",
+                "providedModelName",
+                "HORIZONTAL_BAR",
+            ),
+            "input_tokens_trend": ("inputTokens", None, "LINE_TIME_SERIES"),
+            "output_tokens_trend": ("outputTokens", None, "LINE_TIME_SERIES"),
+        }
+
+        generation_filters = agent_dashboard_definition.GENERATION
+        for key, (measure, dimension, chart) in expected.items():
+            with self.subTest(widget=key):
+                widget = widgets[key]
+                self.assertIn(widget["metrics"][0]["measure"], supported_v2_measures)
+                self.assertEqual(
+                    widget["metrics"], [{"measure": measure, "agg": "sum"}]
+                )
+                self.assertEqual(
+                    widget["dimensions"],
+                    [{"field": dimension}] if dimension else [],
+                )
+                self.assertEqual(widget["chartType"], chart)
+                for filter_ in generation_filters:
+                    self.assertIn(filter_, widget["filters"])
+                self.assertIn("provider keys may overlap", widget["description"])
 
     def test_external_change_aborts_before_any_write(self) -> None:
         self.apply()
