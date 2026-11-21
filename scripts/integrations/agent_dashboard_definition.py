@@ -51,17 +51,18 @@ def widget(
     filters: list[dict[str, Any]],
     measure: str = "count",
     agg: str = "count",
-    dimension: str | None = None,
+    dimension: str | tuple[str, ...] | None = None,
     chart: str = "NUMBER",
 ) -> dict[str, Any]:
     config: dict[str, Any] = {"type": chart}
-    if chart == "HORIZONTAL_BAR":
+    if chart in {"HORIZONTAL_BAR", "PIVOT_TABLE"}:
         config["row_limit"] = 20
+    dimension_fields = (dimension,) if isinstance(dimension, str) else dimension or ()
     return {
         "name": name,
         "description": description,
         "view": "observations",
-        "dimensions": [{"field": dimension}] if dimension else [],
+        "dimensions": [{"field": field} for field in dimension_fields],
         "metrics": [{"measure": measure, "agg": agg}],
         "filters": filters,
         "chartType": chart,
@@ -292,8 +293,9 @@ def definitions() -> dict[str, dict[str, Any]]:
         "performance": {
             "name": "AI Observatory — Models and project tools",
             "description": (
-                "OpenCode model observations plus project-wide TOOL observations. Tools can come "
-                "from other integrations; counts and elapsed duration are not measures of correctness."
+                "OpenCode model observations plus project-wide TOOL observations. Reported token "
+                "categories may overlap; tools can come from other integrations, and counts and "
+                "elapsed duration are not measures of correctness."
             ),
             "widgets": {
                 "model_calls": widget(
@@ -378,6 +380,15 @@ def definitions() -> dict[str, dict[str, Any]]:
                     "outputTokens",
                     "sum",
                     chart="LINE_TIME_SERIES",
+                ),
+                "usage_categories_by_model": widget(
+                    "OpenCode usage-detail categories by model",
+                    "Up to 20 raw Langfuse usage-detail key/model pairs; additional pairs may be omitted by the cap. Categories may overlap and are not coverage. Do not add these values to each other or to input, output, or total token sums.",
+                    GENERATION,
+                    "usageByType",
+                    "sum",
+                    ("usageType", "providedModelName"),
+                    "PIVOT_TABLE",
                 ),
                 "model_cost": widget(
                     "OpenCode reported cost by model",

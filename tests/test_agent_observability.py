@@ -227,6 +227,30 @@ class DashboardTests(unittest.TestCase):
                     self.assertIn(filter_, widget["filters"])
                 self.assertIn("provider keys may overlap", widget["description"])
 
+    def test_usage_category_pivot_preserves_raw_keys_by_model(self) -> None:
+        # Langfuse v4.82.0 dataModel.ts declares usageType as a paired expansion
+        # over usage_details and usageByType as its matching raw value measure.
+        widget = agent_dashboard_definition.definitions()["performance"]["widgets"][
+            "usage_categories_by_model"
+        ]
+        self.assertEqual(widget["view"], "observations")
+        self.assertEqual(
+            widget["dimensions"],
+            [{"field": "usageType"}, {"field": "providedModelName"}],
+        )
+        self.assertEqual(widget["metrics"], [{"measure": "usageByType", "agg": "sum"}])
+        self.assertEqual(widget["chartType"], "PIVOT_TABLE")
+        self.assertEqual(
+            widget["chartConfig"], {"type": "PIVOT_TABLE", "row_limit": 20}
+        )
+        for filter_ in agent_dashboard_definition.GENERATION:
+            self.assertIn(filter_, widget["filters"])
+        self.assertIn("Up to 20", widget["description"])
+        self.assertIn(
+            "additional pairs may be omitted by the cap", widget["description"]
+        )
+        self.assertIn("not coverage", widget["description"])
+
     def test_external_change_aborts_before_any_write(self) -> None:
         self.apply()
         state, _ = span_dashboard.read_state(agent_dashboard.STATE_NAME)
