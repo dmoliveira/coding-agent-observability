@@ -172,7 +172,15 @@ def summarize(
     value: dict[str, Any],
     turns: set[tuple[str, str]],
     include_identifiers: bool = False,
+    computed_at: dt.datetime | None = None,
 ) -> dict[str, Any]:
+    if computed_at is None:
+        computed_at = dt.datetime.now(dt.timezone.utc)
+    elif computed_at.tzinfo is None or computed_at.utcoffset() is None:
+        raise ValueError("Task evidence report time must include a timezone.")
+    computed_at = computed_at.astimezone(dt.timezone.utc)
+    as_of = dt.datetime.fromisoformat(value["as_of"])
+    age_seconds = (computed_at - as_of).total_seconds()
     tasks = value["tasks"]
     ids = {task["id"] for task in tasks}
     bindings = binding_owners(value)
@@ -180,6 +188,11 @@ def summarize(
     result: dict[str, Any] = {
         "evidence_class": "operator_supplied_attestation",
         "as_of": value["as_of"],
+        "freshness": {
+            "age_seconds": age_seconds,
+            "future_dated": age_seconds < 0,
+            "interpretation": "Age relative to report computed_at; no stale threshold is applied and age does not verify attestation claims.",
+        },
         "task_records": len(tasks),
         "by_kind": {key: sum(task["kind"] == key for task in tasks) for key in KINDS},
         "by_status": {

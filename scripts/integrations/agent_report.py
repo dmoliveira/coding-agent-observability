@@ -627,11 +627,12 @@ def build_report(
                     bucket["reported_total_tokens"] += total
                     bucket["generations_with_total_tokens"] += 1
 
+    computed_at = dt.datetime.now(UTC)
     report: dict[str, Any] = {
         "schema_version": "1.0",
         "source": "langfuse-v2-observations",
         "expected_langfuse_version": "4.82.0",
-        "computed_at": dt.datetime.now(UTC).isoformat(),
+        "computed_at": computed_at.isoformat(),
         "window": {
             "from_inclusive": start.isoformat(),
             "to_exclusive": end.isoformat(),
@@ -737,6 +738,7 @@ def build_report(
             task_snapshot,
             {(turn["traceId"], turn["id"]) for turn in turns},
             include_identifiers,
+            computed_at=computed_at,
         )
         usage, per_task_usage = task_generation_usage(
             task_snapshot,
