@@ -611,6 +611,8 @@ def build_report(
             timings[key] = observed_time(turn, [*attached[key], *child_turns[key]])
     daily: dict[str, Counter] = defaultdict(Counter)
     weekly: dict[str, Counter] = defaultdict(Counter)
+    daily_generations: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    weekly_generations: dict[str, list[dict[str, Any]]] = defaultdict(list)
     missing_start = 0
     for row in [*turns, *linked, *runtime_events]:
         try:
@@ -619,13 +621,35 @@ def build_report(
             missing_start += 1
             continue
         year, week, _ = date.isocalendar()
-        for bucket in (daily[date.isoformat()], weekly[f"{year}-W{week:02d}"]):
-            bucket[kind(row)] += 1
-            if kind(row) == "generation":
+        day = date.isoformat()
+        iso_week = f"{year}-W{week:02d}"
+        category = kind(row)
+        for bucket in (daily[day], weekly[iso_week]):
+            bucket[category] += 1
+            if category == "generation":
                 total = row["usageDetails"].get("total")
                 if total is not None:
                     bucket["reported_total_tokens"] += total
                     bucket["generations_with_total_tokens"] += 1
+        if category == "generation":
+            daily_generations[day].append(row)
+            weekly_generations[iso_week].append(row)
+
+    def time_buckets(
+        counts: dict[str, Counter],
+        generation_rows: dict[str, list[dict[str, Any]]],
+        key: str,
+    ) -> list[dict[str, Any]]:
+        return [
+            {
+                key: bucket,
+                **dict(bucket_counts),
+                "generation_token_usage": usage_summary(
+                    generation_rows.get(bucket, [])
+                ),
+            }
+            for bucket, bucket_counts in sorted(counts.items())
+        ]
 
     computed_at = dt.datetime.now(UTC)
     report: dict[str, Any] = {
@@ -719,12 +743,8 @@ def build_report(
             ),
             "interpretation": "Uncovered time excludes observed linked child intervals only; it is not proof of a human, tool, service or unnecessary wait.",
         },
-        "by_day_utc": [
-            {"day": day, **dict(counts)} for day, counts in sorted(daily.items())
-        ],
-        "by_iso_week_utc": [
-            {"week": week, **dict(counts)} for week, counts in sorted(weekly.items())
-        ],
+        "by_day_utc": time_buckets(daily, daily_generations, "day"),
+        "by_iso_week_utc": time_buckets(weekly, weekly_generations, "week"),
         "unknown": {
             "task_completion": "Turn end and non-error level do not establish task success.",
             "task_epic_links": "Explicit task hierarchy is not available in these observations.",
