@@ -22,7 +22,7 @@ class MetricContractTests(unittest.TestCase):
         self.assertEqual(len(families), 82)
         self.assertEqual(self.registry["metric_family_count"], 82)
         self.assertEqual(len(self.registry["families"]), 82)
-        self.assertEqual(self.registry["metric_component_count"], 262)
+        self.assertEqual(self.registry["metric_component_count"], 268)
         self.assertTrue(
             all(re.fullmatch(r"[CTFLQAMRX][0-9]+", key) for key in families)
         )
@@ -52,6 +52,15 @@ class MetricContractTests(unittest.TestCase):
                 self.assertTrue(component["eligibility"])
                 self.assertTrue(component["exclusions"])
                 self.assertTrue(component["timestamp_basis"])
+                self.assertEqual(
+                    set(component["cohort_contract"]),
+                    set(self.registry["cohort_contract_schema"]["required"]),
+                )
+                if component["definition_version"] == "1.2":
+                    self.assertEqual(
+                        component["owner_review_status"],
+                        "required_before_metric_delivery",
+                    )
                 self.assertIn(
                     component["timestamp_basis_status"],
                     {"observed", "requires_source_probe"},
@@ -81,6 +90,29 @@ class MetricContractTests(unittest.TestCase):
                     self.assertTrue(component["numerator"])
                     self.assertTrue(component["denominator"])
                     self.assertIn("/", component["formula"])
+                cohort = component["cohort_contract"]
+                contract_schema = self.registry["cohort_contract_schema"]["properties"]
+                self.assertIn(
+                    cohort["population_basis"],
+                    contract_schema["population_basis"]["enum"],
+                )
+                self.assertIn(
+                    cohort["cohort_state"], contract_schema["cohort_state"]["enum"]
+                )
+                self.assertIn(
+                    cohort["sampling_design"],
+                    contract_schema["sampling_design"]["enum"],
+                )
+                self.assertIn(
+                    cohort["pooling_policy"], contract_schema["pooling_policy"]["enum"]
+                )
+                self.assertIn(
+                    cohort["cluster_unit"], contract_schema["cluster_unit"]["enum"]
+                )
+                if cohort["selection_probability_status"] == "known":
+                    self.assertIsInstance(cohort["selection_probability"], (int, float))
+                else:
+                    self.assertIsNone(cohort["selection_probability"])
                 if component["aggregation"] == "count":
                     self.assertIn(component["id"], component["formula"])
 
@@ -114,9 +146,14 @@ class MetricContractTests(unittest.TestCase):
                 "counter_epoch",
                 "counter_epoch_reason",
                 "source_clock_uncertainty_ms",
+                "source_clock_uncertainty_reason",
                 "watermark",
+                "watermark_reason",
                 "late_data_policy",
                 "uncertainty",
+                "quantile_method",
+                "quantile_method_reason",
+                "sample_size_reason",
                 "timestamp_basis",
                 "window_from",
                 "window_to",
@@ -143,6 +180,8 @@ class MetricContractTests(unittest.TestCase):
         self.assertEqual(
             schema["$schema"], "https://json-schema.org/draft/2020-12/schema"
         )
+        self.assertEqual(self.registry["schema_version"], "aiobs.metric-contract.v1.2")
+        self.assertEqual(schema["title"], "AI Observatory metric instance v1.2")
         self.assertFalse(schema["additionalProperties"])
         self.assertEqual(
             set(schema["required"]), set(self.registry["metric_fields_required"])
@@ -183,12 +222,52 @@ class MetricContractTests(unittest.TestCase):
                 for item in schema["allOf"]
             )
         )
+        self.assertTrue(
+            any(
+                item.get("if", {})
+                .get("properties", {})
+                .get("denominator", {})
+                .get("const")
+                == 0
+                and item.get("then", {})
+                .get("properties", {})
+                .get("value", {})
+                .get("type")
+                == "null"
+                for item in schema["allOf"]
+            )
+        )
+        self.assertTrue(
+            any(
+                item.get("if", {})
+                .get("properties", {})
+                .get("metric_id", {})
+                .get("pattern")
+                == "^C3\\."
+                and item.get("then", {})
+                .get("properties", {})
+                .get("counter_epoch", {})
+                .get("type")
+                == "string"
+                for item in schema["allOf"]
+            )
+        )
         self.assertFalse(schema["properties"]["dimensions"]["additionalProperties"])
         self.assertFalse(schema["properties"]["coverage"]["additionalProperties"])
         self.assertIn("reasons", schema["properties"]["coverage"]["required"])
         self.assertIn("sampling_notes", schema["properties"]["population"]["required"])
         self.assertIn(
             "late_data_policy", schema["properties"]["population"]["required"]
+        )
+        self.assertIn("basis_kind", schema["properties"]["population"]["required"])
+        self.assertIn(
+            "source_clock_uncertainty_reason",
+            schema["properties"]["population"]["required"],
+        )
+        self.assertIn("complete", schema["properties"]["coverage"]["required"])
+        self.assertIn(
+            "independent_cluster_count",
+            schema["properties"]["uncertainty"]["required"],
         )
         self.assertIn(
             "null", schema["properties"]["coverage"]["properties"]["eligible"]["type"]
@@ -302,6 +381,237 @@ class MetricContractTests(unittest.TestCase):
             "explicitly-unavailable-with-reason",
         )
         self.assertEqual(components["Q3.acceptance_rate"]["delivery_state"], "planned")
+
+    def test_family_specific_cohort_and_coverage_contracts(self) -> None:
+        components = {
+            component["id"]: component
+            for family in self.families
+            for component in family["components"]
+        }
+        for component_id in (
+            "C3.receipt_admission_fraction",
+            "C3.receipt_drop_fraction",
+            "C3.admission_emission_fraction",
+            "C3.emission_acknowledgement_fraction",
+            "C3.acknowledgement_ingestion_fraction",
+            "C3.reconciled_completeness",
+        ):
+            component = components[component_id]
+            cohort = component["cohort_contract"]
+            self.assertEqual(
+                cohort["population_basis"], "counter_reconciliation_window"
+            )
+            self.assertEqual(cohort["cluster_unit"], "producer_epoch")
+            self.assertIn("unchanged", cohort["closure_rule"])
+            self.assertIn("watermark", cohort["late_data_policy"])
+        self.assertEqual(
+            components["T3.classification_coverage"]["denominator"],
+            "eligible attempts in a closed execution cohort",
+        )
+        self.assertIn("unresolved", components["T3.classification_coverage"]["formula"])
+        self.assertIn(
+            "T3 coverage", components["T4.unexpected_technical_rate"]["formula"]
+        )
+        self.assertIn(
+            "completed intervals only",
+            components["F3.admission_to_terminal"]["formula"],
+        )
+        self.assertIn(
+            "declared horizon", components["Q6.mature_reopen_rate"]["formula"]
+        )
+        self.assertIn(
+            "mature",
+            components["Q6.mature_reopen_rate"]["cohort_contract"][
+                "right_censoring_policy"
+            ],
+        )
+        self.assertIn("zero relevant", components["M3.precision_at_k"]["formula"])
+        self.assertIn(
+            "explicit_correct_abstentions",
+            components["M3.no_relevant_abstention"]["formula"],
+        )
+        self.assertIn(
+            "complete eligible cohort", components["X4.resource_yield"]["formula"]
+        )
+        self.assertIn("full-cohort", components["X4.resource_yield"]["formula"])
+        self.assertIn(
+            "T3", self.registry["cohort_and_statistics_policy"]["family_specific"]
+        )
+        self.assertIn("multiplicity", self.registry["cohort_and_statistics_policy"])
+
+    def test_hand_calculated_cohort_clock_counter_weighting_and_zero_cases(
+        self,
+    ) -> None:
+        examples = {item["id"]: item for item in self.registry["contract_examples"]}
+
+        followup = examples["closed_reopen_follow_up"]
+        inputs = followup["inputs"]
+        expected = followup["expected"]
+        matured_indices = [
+            index
+            for index, accepted_at in enumerate(inputs["accepted_at_minutes"])
+            if accepted_at is not None
+            and accepted_at
+            + inputs["horizon_minutes"]
+            + inputs["lateness_allowance_minutes"]
+            <= inputs["as_of_minutes"]
+            and inputs["watermark_minutes"]
+            >= accepted_at
+            + inputs["horizon_minutes"]
+            + inputs["lateness_allowance_minutes"]
+        ]
+        self.assertEqual(len(matured_indices), expected["mature_denominator"])
+        self.assertEqual(
+            sum(inputs["reopened"][index] is True for index in matured_indices),
+            expected["reopened_numerator"],
+        )
+        self.assertEqual(
+            expected["reopen_fraction"],
+            expected["reopened_numerator"] / expected["mature_denominator"],
+        )
+        immature_watermark = 16
+        self.assertEqual(
+            sum(
+                accepted_at is not None
+                and accepted_at
+                + inputs["horizon_minutes"]
+                + inputs["lateness_allowance_minutes"]
+                <= inputs["as_of_minutes"]
+                and immature_watermark
+                >= accepted_at
+                + inputs["horizon_minutes"]
+                + inputs["lateness_allowance_minutes"]
+                for accepted_at in inputs["accepted_at_minutes"]
+            ),
+            1,
+        )
+        self.assertEqual(
+            sum(value is not None for value in inputs["accepted_at_minutes"])
+            - len(matured_indices),
+            expected["immature_censored"],
+        )
+        self.assertEqual(
+            sum(value is None for value in inputs["accepted_at_minutes"]),
+            expected["missing_entry_time"],
+        )
+
+        duration = examples["completed_duration_with_censoring"]
+        values = sorted(duration["inputs"]["completed_elapsed_seconds"])
+        p50 = (values[0] + values[1]) / 2
+        self.assertEqual(p50, duration["expected"]["completed_only_p50_seconds"])
+        self.assertEqual(duration["expected"]["completed_n"], len(values))
+        self.assertEqual(
+            duration["expected"]["censored"],
+            duration["inputs"]["right_censored_running"],
+        )
+
+        counters = examples["same_epoch_collector_stage_reconciliation"]
+        inputs = counters["inputs"]
+        expected = counters["expected"]
+        self.assertEqual(len(set(inputs["epoch_by_stage"].values())), 1)
+        self.assertTrue(inputs["watermark_passed_window_end"])
+        counts = inputs["counts"]
+        self.assertAlmostEqual(
+            counts["queue_admitted"] / counts["eligible_received"],
+            expected["receipt_admission_fraction"],
+        )
+        self.assertAlmostEqual(
+            counts["queue_dropped"] / counts["eligible_received"],
+            expected["receipt_drop_fraction"],
+        )
+        self.assertAlmostEqual(
+            counts["unique_emitted"] / counts["queue_admitted"],
+            expected["admission_emission_fraction"],
+        )
+        self.assertAlmostEqual(
+            counts["acknowledged"] / counts["unique_emitted"],
+            expected["emission_acknowledgement_fraction"],
+        )
+        self.assertAlmostEqual(
+            counts["confirmed_ingested"] / counts["acknowledged"],
+            expected["acknowledgement_ingestion_fraction"],
+        )
+        self.assertAlmostEqual(
+            counts["confirmed_ingested"] / counts["unique_emitted"],
+            expected["reconciled_completeness"],
+        )
+
+        def stage_ratio(
+            numerator: str,
+            denominator: str,
+            epochs: dict[str, str],
+            watermark_passed: bool | None = None,
+        ) -> float | None:
+            if watermark_passed is None:
+                watermark_passed = inputs["watermark_passed_window_end"]
+            if not watermark_passed:
+                return None
+            if epochs[numerator] != epochs[denominator] or counts[denominator] == 0:
+                return None
+            return counts[numerator] / counts[denominator]
+
+        reset_epochs = dict(inputs["epoch_by_stage"], acknowledged="worker-8")
+        self.assertIsNone(
+            stage_ratio("confirmed_ingested", "acknowledged", reset_epochs)
+        )
+        self.assertIsNone(
+            stage_ratio(
+                "confirmed_ingested",
+                "acknowledged",
+                inputs["epoch_by_stage"],
+                watermark_passed=False,
+            )
+        )
+
+        clock = examples["clock_uncertainty_bounds_ordering"]
+        clock_in = clock["inputs"]
+        duration = clock_in["end_time_seconds"] - clock_in["start_time_seconds"]
+        uncertainty = (
+            clock_in["start_uncertainty_seconds"] + clock_in["end_uncertainty_seconds"]
+        )
+        self.assertAlmostEqual(duration, clock["expected"]["duration_seconds"])
+        self.assertAlmostEqual(
+            uncertainty, clock["expected"]["duration_uncertainty_seconds"]
+        )
+        self.assertAlmostEqual(
+            duration - uncertainty,
+            clock["expected"]["duration_bounds_seconds"][0],
+        )
+        self.assertAlmostEqual(
+            duration + uncertainty,
+            clock["expected"]["duration_bounds_seconds"][1],
+        )
+        self.assertEqual(
+            "ambiguous"
+            if clock_in["cross_source_event_gap_seconds"]
+            <= clock_in["cross_source_uncertainty_seconds"]
+            else "ordered",
+            clock["expected"]["cross_source_relation"],
+        )
+
+        weighted = examples["weighted_sample_vs_hand_selected"]
+        sample = weighted["inputs"]["sample"]
+        raw = sum(row["success"] for row in sample) / len(sample)
+        weighted_fraction = sum(
+            row["success"] / row["selection_probability"] for row in sample
+        ) / sum(1 / row["selection_probability"] for row in sample)
+        self.assertAlmostEqual(raw, weighted["expected"]["unweighted_sample_fraction"])
+        self.assertAlmostEqual(
+            weighted_fraction,
+            weighted["expected"]["inverse_probability_weighted_fraction"],
+        )
+        self.assertFalse(
+            weighted["expected"]["hand_selected_population_inference_allowed"]
+        )
+        self.assertIn("hand-selected", weighted["rule"])
+        zero = examples["zero_denominator_is_unavailable"]
+        value = (
+            zero["inputs"]["numerator"] / zero["inputs"]["denominator"]
+            if zero["inputs"]["denominator"] > 0
+            else None
+        )
+        self.assertIsNone(value)
+        self.assertIsNone(zero["expected"]["value"])
 
 
 if __name__ == "__main__":
