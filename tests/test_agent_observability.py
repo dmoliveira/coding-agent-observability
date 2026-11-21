@@ -100,6 +100,93 @@ class DashboardTests(unittest.TestCase):
         definitions = agent_dashboard_definition.definitions()
         self.assertIn("project-wide", definitions["performance"]["description"])
         self.assertIn("not proof", definitions["operations"]["description"])
+        for panel_name, panel in definitions.items():
+            dashboard_id = state["resources"][f"dashboard:{panel_name}"]["id"]
+            dashboard = self.client.resources[
+                f"{span_dashboard.PATHS['dashboard']}/{dashboard_id}"
+            ]
+            placed = dashboard["definition"]["widgets"]
+            self.assertEqual(len(placed), len(panel["widgets"]))
+            self.assertTrue(all(item.get("widgetId") for item in placed))
+
+    def test_visualizations_use_supported_types_and_non_overlapping_layouts(
+        self,
+    ) -> None:
+        supported = {
+            # DashboardWidgetChartType from Langfuse v4.82.0:
+            # web/src/features/widgets/lib/dashboardWidgetChartTypes.ts
+            "LINE_TIME_SERIES",
+            "AREA_TIME_SERIES",
+            "BAR_TIME_SERIES",
+            "HORIZONTAL_BAR",
+            "VERTICAL_BAR",
+            "PIE",
+            "NUMBER",
+            "HISTOGRAM",
+            "PIVOT_TABLE",
+        }
+        definitions = agent_dashboard_definition.definitions()
+        expected_trends = {
+            "operations": {
+                "turn_trend": "LINE_TIME_SERIES",
+                "turn_latency_trend": "LINE_TIME_SERIES",
+                "turn_error_trend": "BAR_TIME_SERIES",
+                "generation_trend": "LINE_TIME_SERIES",
+                "generation_latency_trend": "LINE_TIME_SERIES",
+                "generation_error_trend": "BAR_TIME_SERIES",
+            },
+            "performance": {
+                "tokens_trend": "LINE_TIME_SERIES",
+                "cost_trend": "LINE_TIME_SERIES",
+                "tool_trend": "LINE_TIME_SERIES",
+                "tool_error_trend": "BAR_TIME_SERIES",
+            },
+        }
+
+        for panel in definitions.values():
+            widgets = panel["widgets"]
+            placements = agent_dashboard.dashboard_placements(widgets)
+            self.assertEqual(
+                {placement["id"] for placement in placements}, set(widgets)
+            )
+            occupied: set[tuple[int, int]] = set()
+            for key, definition in widgets.items():
+                chart = definition["chartType"]
+                self.assertIn(chart, supported, key)
+                self.assertEqual(definition["chartConfig"]["type"], chart)
+                if chart == "PIE":
+                    self.assertEqual(definition["dimensions"], [{"field": "level"}])
+                    self.assertEqual(
+                        definition["metrics"], [{"measure": "count", "agg": "count"}]
+                    )
+                placement = next(item for item in placements if item["id"] == key)
+                self.assertGreater(placement["width"], 0)
+                self.assertGreater(placement["height"], 0)
+                self.assertLessEqual(placement["x"] + placement["width"], 12)
+                if chart.endswith("TIME_SERIES"):
+                    self.assertEqual(placement["width"], 6)
+                for cell in (
+                    (column, row)
+                    for column in range(
+                        placement["x"], placement["x"] + placement["width"]
+                    )
+                    for row in range(
+                        placement["y"], placement["y"] + placement["height"]
+                    )
+                ):
+                    self.assertNotIn(cell, occupied)
+                    occupied.add(cell)
+
+        for panel, trends in expected_trends.items():
+            for key, chart in trends.items():
+                self.assertEqual(definitions[panel]["widgets"][key]["chartType"], chart)
+        level_mix = definitions["operations"]["widgets"]["turn_level_distribution"]
+        self.assertIn("not proof of task success", level_mix["description"])
+        for key in ("turn_latency_trend", "generation_latency_trend"):
+            latency_trend = definitions["operations"]["widgets"][key]
+            self.assertEqual(
+                latency_trend["metrics"], [{"measure": "latency", "agg": "p95"}]
+            )
 
     def test_external_change_aborts_before_any_write(self) -> None:
         self.apply()
