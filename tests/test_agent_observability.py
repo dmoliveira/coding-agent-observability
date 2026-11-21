@@ -483,6 +483,54 @@ class ReportTests(unittest.TestCase):
         )
         self.assertEqual(result["coverage"]["unattached_generation_candidates"], 1)
 
+    def test_generations_without_valid_start_time_are_counted_but_not_bucketed(
+        self,
+    ) -> None:
+        start = dt.datetime(2026, 11, 20, tzinfo=dt.timezone.utc)
+        end = dt.datetime(2026, 11, 21, tzinfo=dt.timezone.utc)
+        rows = [
+            observation(
+                "turn",
+                "opencode.turn",
+                "AGENT",
+                isRootObservation=True,
+                startTime="2026-11-20T00:00:00Z",
+            ),
+            observation(
+                "gen-missing-start",
+                "opencode.generation",
+                "GENERATION",
+                "turn",
+                startTime=None,
+                endTime="2026-11-20T00:00:01Z",
+                usageDetails={"input": 2},
+            ),
+            observation(
+                "gen-invalid-start",
+                "opencode.generation",
+                "GENERATION",
+                "turn",
+                startTime="not-a-timestamp",
+                endTime="2026-11-20T00:00:02Z",
+                usageDetails={"input": 3},
+            ),
+        ]
+        result = report.build_report([report.select(row) for row in rows], start, end)
+
+        self.assertEqual(result["coverage"]["attached_generations"], 2)
+        self.assertEqual(result["coverage"]["missing_or_invalid_start_time"], 2)
+        self.assertEqual(
+            result["coverage"]["linked_generations_without_valid_start_time"], 2
+        )
+        self.assertEqual(
+            result["linked_generations"]["reported_tokens"]["input"]["sum"], 5
+        )
+        day_bucket = result["by_day_utc"][0]
+        week_bucket = result["by_iso_week_utc"][0]
+        self.assertNotIn("generation", day_bucket)
+        self.assertNotIn("generation", week_bucket)
+        self.assertIsNone(day_bucket["generation_token_usage"]["input"]["sum"])
+
     def test_empty_page_with_cursor_and_exact_duplicates(self) -> None:
         row = observation("turn", "opencode.turn", "AGENT")
         client = PageClient(

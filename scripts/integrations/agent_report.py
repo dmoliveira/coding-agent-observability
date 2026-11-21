@@ -614,16 +614,19 @@ def build_report(
     daily_generations: dict[str, list[dict[str, Any]]] = defaultdict(list)
     weekly_generations: dict[str, list[dict[str, Any]]] = defaultdict(list)
     missing_start = 0
+    missing_generation_start = 0
     for row in [*turns, *linked, *runtime_events]:
+        category = kind(row)
         try:
             date = timestamp(row.get("startTime")).date()
         except ValueError:
             missing_start += 1
+            if category == "generation":
+                missing_generation_start += 1
             continue
         year, week, _ = date.isocalendar()
         day = date.isoformat()
         iso_week = f"{year}-W{week:02d}"
-        category = kind(row)
         for bucket in (daily[day], weekly[iso_week]):
             bucket[category] += 1
             if category == "generation":
@@ -690,6 +693,7 @@ def build_report(
             "attached_retries": len(retries),
             "unattached_retry_candidates": unmatched["retry"],
             "missing_or_invalid_start_time": missing_start,
+            "linked_generations_without_valid_start_time": missing_generation_start,
             "limitations": [
                 "Only observations returned in the time window can be linked; parents or children outside it are missing.",
                 "Unattached project tools can belong to other integrations, incomplete traces or the window boundary.",
