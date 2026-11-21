@@ -2,6 +2,7 @@
 .env.*
 !.env.example
 .ai-observatory.lock
+.ai-observatory.report.lock
 .ai-observatory.starting
 .ai-observatory.lmstudio
 .ai-observatory.lmstudio-state.json

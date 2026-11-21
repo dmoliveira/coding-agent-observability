@@ -69,13 +69,23 @@ class ApiError(ValueError):
 class Client:
     def __init__(self, base: str, auth: str) -> None:
         self.base, self.auth = base, auth
+        self.response_bytes_received = 0
         self.opener = urllib.request.build_opener(
             urllib.request.ProxyHandler({}), NoRedirect()
         )
 
     def request(
-        self, method: str, path: str, body: dict[str, Any] | None = None
+        self,
+        method: str,
+        path: str,
+        body: dict[str, Any] | None = None,
+        *,
+        timeout: float = 30,
+        max_response_bytes: int = MAX_RESPONSE,
     ) -> dict[str, Any]:
+        response_limit = min(MAX_RESPONSE, max_response_bytes)
+        if response_limit < 1:
+            raise ValueError("Langfuse response-byte budget is exhausted.")
         headers = {"Authorization": self.auth, "Accept": "application/json"}
         if body is not None:
             headers["Content-Type"] = "application/json"
@@ -86,16 +96,22 @@ class Client:
             data=json.dumps(body).encode() if body is not None else None,
         )
         try:
-            with self.opener.open(request, timeout=30) as response:
-                raw = response.read(MAX_RESPONSE + 1)
-            if len(raw) > MAX_RESPONSE:
-                raise ValueError("Langfuse response was too large.")
+            with self.opener.open(request, timeout=timeout) as response:
+                raw = response.read(response_limit + 1)
+            self.response_bytes_received += len(raw)
+            if len(raw) > response_limit:
+                raise ValueError("Langfuse response-byte budget exceeded.")
             result = json.loads(raw)
         except urllib.error.HTTPError as exc:
             raise ApiError(exc.code) from None
+        except TimeoutError:
+            raise TimeoutError("Langfuse request-time budget exceeded.") from None
+        except urllib.error.URLError as exc:
+            if isinstance(exc.reason, TimeoutError):
+                raise TimeoutError("Langfuse request-time budget exceeded.") from None
+            raise ValueError("Could not safely read the Langfuse response.") from None
         except (
             OSError,
-            urllib.error.URLError,
             http.client.HTTPException,
             UnicodeDecodeError,
             json.JSONDecodeError,

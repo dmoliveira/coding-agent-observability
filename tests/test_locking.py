@@ -15,6 +15,38 @@ import common
 
 
 class LockTests(unittest.TestCase):
+    def test_competing_process_cannot_acquire_report_query_lock(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(common, "ROOT", Path(directory)),
+            common.report_query_lock(),
+        ):
+            code = (
+                "import common,sys; from pathlib import Path; "
+                "common.ROOT=Path(sys.argv[1]); "
+                "ctx=common.report_query_lock(); ctx.__enter__()"
+            )
+            result = subprocess.run(
+                [sys.executable, "-c", code, directory],
+                env={"PYTHONPATH": str(ROOT / "scripts")},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Another structural report query", result.stderr)
+
+    def test_report_query_lock_refuses_symlink(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(common, "ROOT", Path(directory)),
+        ):
+            (Path(directory) / ".ai-observatory.report.lock").symlink_to(
+                Path(directory) / "target"
+            )
+            with self.assertRaises(OSError), common.report_query_lock():
+                pass
+
     def test_competing_process_cannot_acquire_maintenance_lock(self) -> None:
         with (
             tempfile.TemporaryDirectory() as directory,

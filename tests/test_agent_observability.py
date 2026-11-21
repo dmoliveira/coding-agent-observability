@@ -308,11 +308,67 @@ class PageClient:
     def __init__(self, pages: list[dict]) -> None:
         self.pages = pages
         self.requests: list[str] = []
+        self.response_bytes_received = 0
+        self.on_request = None
 
-    def request(self, method: str, path: str) -> dict:
+    def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        timeout: float = 30,
+        max_response_bytes: int = span_dashboard.MAX_RESPONSE,
+    ) -> dict:
         assert method == "GET"
+        assert timeout > 0
         self.requests.append(path)
-        return copy.deepcopy(self.pages[len(self.requests) - 1])
+        if self.on_request is not None:
+            self.on_request()
+        page = copy.deepcopy(self.pages[len(self.requests) - 1])
+        response_size = len(json.dumps(page, separators=(",", ":")).encode("utf-8"))
+        if response_size > max_response_bytes:
+            raise report.BudgetExceeded(
+                "Report total response-byte budget exceeded; narrow the window and retry."
+            )
+        self.response_bytes_received += response_size
+        return page
+
+
+class GeneratedPageClient:
+    def __init__(self, count: int) -> None:
+        self.count = count
+        self.response_bytes_received = 0
+        self.requests = 0
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        timeout: float = 30,
+        max_response_bytes: int = span_dashboard.MAX_RESPONSE,
+    ) -> dict:
+        assert method == "GET"
+        assert timeout > 0
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(path).query)
+        limit = int(query["limit"][0])
+        start = int(query.get("cursor", ["0"])[0])
+        end = min(start + limit, self.count)
+        page = {
+            "data": [
+                observation(f"synthetic-{index}", "synthetic.other", "SPAN")
+                for index in range(start, end)
+            ],
+            "meta": {"cursor": str(end)} if end < self.count else {},
+        }
+        response_size = len(json.dumps(page, separators=(",", ":")).encode("utf-8"))
+        if response_size > max_response_bytes:
+            raise report.BudgetExceeded(
+                "Report total response-byte budget exceeded; narrow the window and retry."
+            )
+        self.response_bytes_received += response_size
+        self.requests += 1
+        return page
 
 
 class ReportTests(unittest.TestCase):
@@ -627,6 +683,101 @@ class ReportTests(unittest.TestCase):
                 self.end,
                 1,
             )
+
+    def test_page_row_and_total_response_byte_budgets_fail_closed(self) -> None:
+        oversized_page = PageClient(
+            [
+                {
+                    "data": [observation(str(i), "other", "SPAN") for i in range(251)],
+                    "meta": {},
+                }
+            ]
+        )
+        with self.assertRaisesRegex(report.BudgetExceeded, "page row budget"):
+            report.fetch_observations(oversized_page, self.start, self.end, 1000)
+
+        client = PageClient([{"data": [], "meta": {}}])
+        with self.assertRaisesRegex(
+            report.BudgetExceeded, "total response-byte budget"
+        ):
+            report.fetch_observations(
+                client,
+                self.start,
+                self.end,
+                10,
+                budget=report.ReportBudget(max_response_bytes=1),
+            )
+
+    def test_slow_page_exhausts_end_to_end_deadline(self) -> None:
+        class Clock:
+            now = 0.0
+
+            def __call__(self) -> float:
+                return self.now
+
+        clock = Clock()
+        client = PageClient([{"data": [], "meta": {}}])
+        client.on_request = lambda: setattr(clock, "now", 121.0)
+        with self.assertRaisesRegex(report.BudgetExceeded, "wall-time budget"):
+            report.fetch_observations(
+                client,
+                self.start,
+                self.end,
+                10,
+                budget=report.ReportBudget(max_seconds=120, clock=clock),
+            )
+
+    def test_request_admission_allows_only_one_in_flight_request(self) -> None:
+        budget = report.ReportBudget()
+        self.assertGreater(budget.admit_request(), 0)
+        try:
+            with self.assertRaisesRegex(report.BudgetExceeded, "concurrency budget"):
+                budget.admit_request()
+        finally:
+            budget.release_request()
+
+    def test_generated_scale_fixtures_stay_within_declared_budgets(self) -> None:
+        for count in (100, 10_000, 100_000):
+            with self.subTest(observations=count):
+                client = GeneratedPageClient(count)
+                budget = report.ReportBudget()
+                rows, duplicates = report.fetch_observations(
+                    client, self.start, self.end, count, budget=budget
+                )
+                result = report.build_report(
+                    rows, self.start, self.end, duplicates, budget=budget
+                )
+                self.assertEqual(result["coverage"]["observations_scanned"], count)
+                self.assertLessEqual(client.requests, report.MAX_PAGES)
+                self.assertLessEqual(
+                    budget.response_bytes, report.MAX_TOTAL_RESPONSE_BYTES
+                )
+                self.assertLessEqual(
+                    len(report.serialize_report(result, budget=budget).encode()),
+                    report.MAX_OUTPUT_BYTES,
+                )
+
+    def test_high_model_cardinality_and_output_bytes_fail_without_truncation(
+        self,
+    ) -> None:
+        rows = [report.select(observation("turn", "opencode.turn", "AGENT"))]
+        rows.extend(
+            report.select(
+                observation(
+                    f"generation-{index}",
+                    "opencode.generation",
+                    "GENERATION",
+                    "turn",
+                    model=f"synthetic-model-{index}",
+                )
+            )
+            for index in range(report.MAX_GROUPS_PER_BREAKDOWN + 1)
+        )
+        with self.assertRaisesRegex(report.BudgetExceeded, "Model cardinality budget"):
+            report.build_report(rows, self.start, self.end)
+
+        with self.assertRaisesRegex(report.BudgetExceeded, "output-byte budget"):
+            report.serialize_report({"synthetic": "x" * 100}, maximum=32)
 
     def test_session_filter_is_bounded_and_does_not_appear_in_default_report(
         self,
