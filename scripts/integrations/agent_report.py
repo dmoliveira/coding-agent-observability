@@ -8,13 +8,18 @@ import datetime as dt
 import json
 import math
 import re
+import signal
 import sys
+import threading
+import time
 import urllib.parse
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import common
+
 from integrations import agent_dashboard_definition as dashboard_spec
 from integrations import span_dashboard, task_evidence
 
@@ -45,6 +50,105 @@ RUNTIME_NAMES = {
     dashboard_spec.PERMISSION_ASK,
     *dashboard_spec.PERMISSION_REPLIES,
 }
+DEFAULT_MAX_OBSERVATIONS = 10_000
+MAX_OBSERVATIONS = 100_000
+MAX_PAGE_ROWS = 250
+MAX_PAGES = 1000
+MAX_REPORT_SECONDS = 120
+MAX_TOTAL_RESPONSE_BYTES = 64 * 1024 * 1024
+MAX_OUTPUT_BYTES = 16 * 1024 * 1024
+MAX_GROUPS_PER_BREAKDOWN = 2000
+MAX_TIME_MODEL_GROUPS = 10_000
+MAX_IDENTIFIER_OBSERVATIONS = 10_000
+
+
+class BudgetExceeded(ValueError):
+    """A report did not finish within its declared resource budgets."""
+
+
+class ReportBudget:
+    def __init__(
+        self,
+        *,
+        max_seconds: float = MAX_REPORT_SECONDS,
+        max_response_bytes: int = MAX_TOTAL_RESPONSE_BYTES,
+        clock: Any = time.monotonic,
+    ) -> None:
+        self.clock = clock
+        self.deadline = clock() + max_seconds
+        self.max_response_bytes = max_response_bytes
+        self.response_bytes = 0
+        self._request_lock = threading.Lock()
+
+    def check(self) -> None:
+        if self.clock() >= self.deadline:
+            raise BudgetExceeded(
+                "Report wall-time budget exceeded; narrow the window and retry."
+            )
+
+    def request_timeout(self) -> float:
+        self.check()
+        return min(30.0, self.deadline - self.clock())
+
+    def response_limit(self) -> int:
+        remaining = self.max_response_bytes - self.response_bytes
+        if remaining < 1:
+            raise BudgetExceeded(
+                "Report total response-byte budget exhausted; narrow the window and retry."
+            )
+        return min(span_dashboard.MAX_RESPONSE, remaining)
+
+    def record_response_bytes(self, count: int) -> None:
+        if count < 0:
+            raise BudgetExceeded("Langfuse response-byte accounting was invalid.")
+        self.response_bytes += count
+        if self.response_bytes > self.max_response_bytes:
+            raise BudgetExceeded(
+                "Report total response-byte budget exceeded; narrow the window and retry."
+            )
+
+    def admit_request(self) -> float:
+        if not self._request_lock.acquire(blocking=False):
+            raise BudgetExceeded(
+                "Report concurrency budget exceeded; only one request may be active."
+            )
+        try:
+            return self.request_timeout()
+        except BaseException:
+            self._request_lock.release()
+            raise
+
+    def release_request(self) -> None:
+        self._request_lock.release()
+
+
+@contextlib.contextmanager
+def enforce_wall_time_budget(budget: ReportBudget):
+    """Interrupt a slow local request at the report deadline when supported."""
+    if threading.current_thread() is not threading.main_thread() or not hasattr(
+        signal, "setitimer"
+    ):
+        yield
+        return
+    if signal.getitimer(signal.ITIMER_REAL) != (0.0, 0.0):
+        raise ValueError(
+            "Cannot safely enforce the report deadline while another process alarm is active."
+        )
+    previous_handler = signal.getsignal(signal.SIGALRM)
+
+    def deadline_expired(_signum: int, _frame: Any) -> None:
+        raise BudgetExceeded(
+            "Report wall-time budget exceeded; narrow the window and retry."
+        )
+
+    signal.signal(signal.SIGALRM, deadline_expired)
+    try:
+        budget.check()
+        signal.setitimer(signal.ITIMER_REAL, budget.deadline - budget.clock())
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
 
 
 def timestamp(value: str) -> dt.datetime:
@@ -111,10 +215,14 @@ def fetch_observations(
     end: dt.datetime,
     maximum: int,
     session_id: str | None = None,
+    *,
+    budget: ReportBudget | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
+    budget = budget or ReportBudget()
+    page_limit = min(MAX_PAGE_ROWS, maximum)
     params: dict[str, Any] = {
         "fields": FIELDS,
-        "limit": min(250, maximum),
+        "limit": page_limit,
         "fromStartTime": start.isoformat(),
         "toStartTime": end.isoformat(),
     }
@@ -125,13 +233,42 @@ def fetch_observations(
     result: dict[tuple[str, str], dict[str, Any]] = {}
     cursors: set[str] = set()
     duplicates = 0
-    for _ in range(1000):
-        page = client.request(
-            "GET", "/api/public/v2/observations?" + urllib.parse.urlencode(params)
-        )
+    previous_response_bytes = getattr(client, "response_bytes_received", None)
+    for _ in range(MAX_PAGES):
+        timeout = budget.admit_request()
+        try:
+            response_limit = budget.response_limit()
+            page = client.request(
+                "GET",
+                "/api/public/v2/observations?" + urllib.parse.urlencode(params),
+                timeout=timeout,
+                max_response_bytes=response_limit,
+            )
+        finally:
+            budget.release_request()
+        budget.check()
+        current_response_bytes = getattr(client, "response_bytes_received", None)
+        if isinstance(previous_response_bytes, int) and isinstance(
+            current_response_bytes, int
+        ):
+            response_bytes = current_response_bytes - previous_response_bytes
+            previous_response_bytes = current_response_bytes
+        else:
+            response_bytes = len(
+                json.dumps(page, separators=(",", ":")).encode("utf-8")
+            )
+        if response_bytes > response_limit:
+            raise BudgetExceeded(
+                "Report response-byte budget exceeded; narrow the window and retry."
+            )
+        budget.record_response_bytes(response_bytes)
         rows, meta = page.get("data"), page.get("meta")
         if not isinstance(rows, list) or not isinstance(meta, dict):
             raise ValueError("Langfuse returned invalid observation pagination.")  # noqa: TRY004
+        if len(rows) > page_limit:
+            raise BudgetExceeded(
+                "Observation page row budget exceeded; narrow the window and retry."
+            )
         for item in rows:
             row = select(item)
             key = (row["traceId"], row["id"])
@@ -144,8 +281,8 @@ def fetch_observations(
             else:
                 result[key] = row
             if len(result) > maximum:
-                raise ValueError(
-                    "Observation limit exceeded; narrow the window or raise the limit."
+                raise BudgetExceeded(
+                    "Observation row budget exceeded; narrow the window or raise the limit."
                 )
         cursor = meta.get("cursor")
         if cursor is None:
@@ -160,12 +297,12 @@ def fetch_observations(
                 "Langfuse returned an invalid or repeated observation cursor."
             )
         if len(result) >= maximum:
-            raise ValueError(
-                "Observation limit reached before the last page; narrow the window or raise the limit."
+            raise BudgetExceeded(
+                "Observation limit reached (row budget exhausted) before the last page; narrow the window or raise the limit."
             )
         cursors.add(cursor)
         params["cursor"] = cursor
-    raise ValueError("Observation page limit reached; narrow the window.")
+    raise BudgetExceeded("Observation page budget exceeded; narrow the window.")
 
 
 def kind(row: dict[str, Any]) -> str:
@@ -372,6 +509,16 @@ def safe_name(value: Any) -> str:
     )
 
 
+def enforce_group_budget(rows: list[dict[str, Any]], field: str, label: str) -> None:
+    names: set[str] = set()
+    for row in rows:
+        names.add(safe_name(row.get(field)))
+        if len(names) > MAX_GROUPS_PER_BREAKDOWN:
+            raise BudgetExceeded(
+                f"{label} cardinality budget exceeded; narrow the window and retry."
+            )
+
+
 def by_name(
     rows: list[dict[str, Any]], field: str, *, include_usage: bool = False
 ) -> list[dict[str, Any]]:
@@ -483,7 +630,16 @@ def build_report(
     include_identifiers: bool = False,
     session_scoped: bool = False,
     task_snapshot: dict[str, Any] | None = None,
+    budget: ReportBudget | None = None,
 ) -> dict[str, Any]:
+    if budget is not None:
+        budget.check()
+    if len(rows) > MAX_OBSERVATIONS:
+        raise BudgetExceeded("Observation row budget exceeded before computation.")
+    if include_identifiers and len(rows) > MAX_IDENTIFIER_OBSERVATIONS:
+        raise BudgetExceeded(
+            "Identifier-detail observation budget exceeded; narrow the window."
+        )
     index = {(row["traceId"], row["id"]): row for row in rows}
     turns = [row for row in rows if kind(row) == "turn"]
     attached: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
@@ -492,7 +648,9 @@ def build_report(
 
     # A parent cycle, including one that passes through a turn, invalidates ancestry.
     cycle_affected: dict[tuple[str, str], bool] = {}
-    for key in index:
+    for position, key in enumerate(index):
+        if budget is not None and position % 256 == 0:
+            budget.check()
         path: list[tuple[str, str]] = []
         seen: set[tuple[str, str]] = set()
         current = key
@@ -540,7 +698,9 @@ def build_report(
             owner_cache[key] = owner
         return owner
 
-    for row in rows:
+    for position, row in enumerate(rows):
+        if budget is not None and position % 256 == 0:
+            budget.check()
         category = kind(row)
         if category not in ("generation", "tool", "retry"):
             continue
@@ -595,6 +755,8 @@ def build_report(
         in {*dashboard_spec.COMPACTION["ended"], *dashboard_spec.COMPACTION["failed"]}
     ]
     root_turns = [row for row in turns if row.get("isRootObservation") is True]
+    enforce_group_budget(generations, "model", "Model")
+    enforce_group_budget(tools, "name", "Tool-name")
     patterns = {}
     timings = {}
     for turn in turns:
@@ -619,9 +781,13 @@ def build_report(
     weekly_generation_models: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(
         dict
     )
+    time_model_groups: set[tuple[str, str]] = set()
+    week_model_groups: set[tuple[str, str]] = set()
     missing_start = 0
     missing_generation_start = 0
-    for row in [*turns, *linked, *runtime_events]:
+    for position, row in enumerate([*turns, *linked, *runtime_events]):
+        if budget is not None and position % 256 == 0:
+            budget.check()
         category = kind(row)
         try:
             date = timestamp(row.get("startTime")).date()
@@ -644,6 +810,12 @@ def build_report(
             daily_generations[day].append(row)
             weekly_generations[iso_week].append(row)
             model = safe_name(row.get("model"))
+            time_model_groups.add((day, model))
+            week_model_groups.add((iso_week, model))
+            if len(time_model_groups) + len(week_model_groups) > MAX_TIME_MODEL_GROUPS:
+                raise BudgetExceeded(
+                    "Day/week model-group budget exceeded; narrow the window and retry."
+                )
             daily_generation_models[day].setdefault(model, []).append(row)
             weekly_generation_models[iso_week].setdefault(model, []).append(row)
 
@@ -801,7 +973,9 @@ def build_report(
     if include_identifiers:
         details = []
         sessions: dict[str, list[dict[str, Any]]] = defaultdict(list)
-        for row in [*turns, *linked, *runtime_events]:
+        for position, row in enumerate([*turns, *linked, *runtime_events]):
+            if budget is not None and position % 256 == 0:
+                budget.check()
             sessions[safe_name(row.get("sessionId"))].append(row)
         for turn in sorted(
             turns, key=lambda item: (item.get("startTime") or "", item["id"])
@@ -862,6 +1036,32 @@ def build_report(
     return report
 
 
+def serialize_report(
+    report: dict[str, Any],
+    *,
+    maximum: int = MAX_OUTPUT_BYTES,
+    budget: ReportBudget | None = None,
+) -> str:
+    """Encode atomically into a bounded buffer so stdout is never truncated."""
+    output = bytearray()
+    next_deadline_check = 64 * 1024
+    encoder = json.JSONEncoder(indent=2, allow_nan=False)
+    for chunk in encoder.iterencode(report):
+        encoded = chunk.encode("utf-8")
+        if len(output) + len(encoded) + 1 > maximum:
+            raise BudgetExceeded(
+                "Report output-byte budget exceeded; narrow the window or omit identifiers."
+            )
+        output.extend(encoded)
+        if budget is not None and len(output) >= next_deadline_check:
+            budget.check()
+            next_deadline_check = len(output) + 64 * 1024
+    if budget is not None:
+        budget.check()
+    output.append(0x0A)
+    return output.decode("utf-8")
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -874,8 +1074,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--max-observations",
         type=int,
-        default=10000,
-        help="Fail rather than truncate after this many observations (1–100000)",
+        default=DEFAULT_MAX_OBSERVATIONS,
+        help=f"Fail rather than truncate after this many observations (1–{MAX_OBSERVATIONS})",
     )
     parser.add_argument(
         "--include-identifiers",
@@ -896,20 +1096,30 @@ def main(argv: list[str] | None = None) -> None:
     start = timestamp(args.from_time) if args.from_time else end - dt.timedelta(days=7)
     if start >= end or end - start > dt.timedelta(days=90):
         raise ValueError("The time window must be positive and at most 90 days.")
-    if not 1 <= args.max_observations <= 100000:
-        raise ValueError("The observation limit must be between 1 and 100000.")
-    snapshot = (
-        task_evidence.read_file(args.task_evidence) if args.task_evidence else None
-    )
-    # The credential helper may print a non-secret diagnostic; keep stdout JSON-only.
-    with contextlib.redirect_stdout(sys.stderr):
-        client, _, _ = span_dashboard.context()
-    rows, duplicates = fetch_observations(
-        client, start, end, args.max_observations, args.session_id
-    )
-    print(
-        json.dumps(
-            build_report(
+    if not 1 <= args.max_observations <= MAX_OBSERVATIONS:
+        raise ValueError(
+            f"The observation limit must be between 1 and {MAX_OBSERVATIONS}."
+        )
+    budget = ReportBudget()
+    with common.report_query_lock():
+        with enforce_wall_time_budget(budget):
+            snapshot = (
+                task_evidence.read_file(args.task_evidence)
+                if args.task_evidence
+                else None
+            )
+            # The credential helper may print a non-secret diagnostic; keep stdout JSON-only.
+            with contextlib.redirect_stdout(sys.stderr):
+                client, _, _ = span_dashboard.context()
+            rows, duplicates = fetch_observations(
+                client,
+                start,
+                end,
+                args.max_observations,
+                args.session_id,
+                budget=budget,
+            )
+            result = build_report(
                 rows,
                 start,
                 end,
@@ -917,11 +1127,11 @@ def main(argv: list[str] | None = None) -> None:
                 args.include_identifiers,
                 session_scoped=args.session_id is not None,
                 task_snapshot=snapshot,
-            ),
-            indent=2,
-            allow_nan=False,
-        )
-    )
+                budget=budget,
+            )
+            output = serialize_report(result, budget=budget)
+        # stdout transport can stall or fail; it is outside the report deadline.
+        sys.stdout.write(output)
 
 
 if __name__ == "__main__":

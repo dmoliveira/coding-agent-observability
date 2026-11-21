@@ -9,6 +9,7 @@ import os
 import sys
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -241,6 +242,30 @@ class DashboardTests(unittest.TestCase):
         with self.assertRaises(OSError):
             dashboard.read_state()
         self.assertEqual(target.read_text(), "user data")
+
+    def test_client_caps_response_bytes_and_tracks_successful_reads(self) -> None:
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args) -> None:
+                pass
+
+            def read(self, maximum: int) -> bytes:
+                return b"x" * maximum
+
+        client = dashboard.Client("http://127.0.0.1:3000", "synthetic-auth")
+        client.opener = mock.Mock()
+        client.opener.open.return_value = Response()
+        with self.assertRaisesRegex(ValueError, "response-byte budget"):
+            client.request("GET", "/synthetic", timeout=0.5)
+        client.opener.open.assert_called_once()
+        self.assertEqual(client.opener.open.call_args.kwargs["timeout"], 0.5)
+        self.assertEqual(client.response_bytes_received, dashboard.MAX_RESPONSE + 1)
+
+        client.opener.open.side_effect = urllib.error.URLError(TimeoutError())
+        with self.assertRaisesRegex(TimeoutError, "request-time budget"):
+            client.request("GET", "/synthetic", timeout=0.5)
 
 
 if __name__ == "__main__":

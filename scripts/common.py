@@ -20,6 +20,7 @@ LMSTUDIO_COMPOSE = ROOT / "compose.lmstudio.yaml"
 LMSTUDIO_MARKER = ".ai-observatory.lmstudio"
 LMSTUDIO_MARKER_CONTENT = b"ai-observatory-lmstudio-v1\n"
 _LOCK_FD: int | None = None
+_REPORT_LOCK_FD: int | None = None
 CONFIG_KEYS = {
     "COMPOSE_PROJECT_NAME",
     "WEB_PORT",
@@ -69,6 +70,39 @@ def maintenance_lock() -> Iterator[None]:
     finally:
         _LOCK_FD = None
         # Do not explicitly unlock: a child may still be using this descriptor.
+        os.close(fd)
+
+
+@contextmanager
+def report_query_lock() -> Iterator[None]:
+    """Admit one structural report process per checkout without waiting."""
+    global _REPORT_LOCK_FD
+    if _REPORT_LOCK_FD is not None:
+        raise ValueError("Another structural report query is already running.")
+    flags = os.O_RDWR | os.O_CREAT
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(ROOT / ".ai-observatory.report.lock", flags, 0o600)
+    try:
+        info = os.fstat(fd)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.getuid()
+            or info.st_mode & 0o077
+        ):
+            raise ValueError(
+                "Report lock must be a private file owned by the current user."
+            )
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise ValueError(
+                "Another structural report query is running in this checkout."
+            ) from None
+        _REPORT_LOCK_FD = fd
+        yield
+    finally:
+        _REPORT_LOCK_FD = None
         os.close(fd)
 
 
