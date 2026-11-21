@@ -420,7 +420,17 @@ class ReportTests(unittest.TestCase):
                 "GENERATION",
                 "turn-sunday",
                 startTime="2026-11-08T23:59:10Z",
+                model="model-a",
                 usageDetails={"input": 0, "total": 0},
+            ),
+            observation(
+                "gen-sunday-a2",
+                "opencode.generation",
+                "GENERATION",
+                "turn-sunday",
+                startTime="2026-11-08T23:59:15Z",
+                model="model-a",
+                usageDetails={"input": 2, "output": 2},
             ),
             observation(
                 "gen-sunday-2",
@@ -428,6 +438,7 @@ class ReportTests(unittest.TestCase):
                 "GENERATION",
                 "turn-sunday",
                 startTime="2026-11-08T23:59:20Z",
+                model="model-b",
                 usageDetails={"input": 3, "output": 4},
             ),
             observation(
@@ -443,6 +454,7 @@ class ReportTests(unittest.TestCase):
                 "GENERATION",
                 "turn-monday",
                 startTime="2026-11-09T00:01:10Z",
+                model="model-a",
                 usageDetails={"output": 5},
             ),
             observation(
@@ -451,6 +463,7 @@ class ReportTests(unittest.TestCase):
                 "GENERATION",
                 "missing-parent",
                 startTime="2026-11-09T00:02:00Z",
+                model="unlinked-model",
                 usageDetails={"input": 999, "total": 999},
             ),
         ]
@@ -461,12 +474,43 @@ class ReportTests(unittest.TestCase):
         sunday = sunday_bucket["generation_token_usage"]
         monday = monday_bucket["generation_token_usage"]
         self.assertEqual(set(sunday), set(report.TOKEN_KEYS))
-        self.assertEqual(sunday_bucket["generation"], 2)
-        self.assertEqual(sunday["input"], {"sum": 3, "reported": 2, "missing": 0})
-        self.assertEqual(sunday["total"], {"sum": 0, "reported": 1, "missing": 1})
-        self.assertEqual(sunday["output"], {"sum": 4, "reported": 1, "missing": 1})
+        self.assertEqual(sunday_bucket["generation"], 3)
+        self.assertEqual(sunday["input"], {"sum": 5, "reported": 3, "missing": 0})
+        self.assertEqual(sunday["total"], {"sum": 0, "reported": 1, "missing": 2})
+        self.assertEqual(sunday["output"], {"sum": 6, "reported": 2, "missing": 1})
+        sunday_by_model = {
+            item["model"]: item
+            for item in sunday_bucket["generation_token_usage_by_model"]
+        }
+        self.assertEqual(set(sunday_by_model), {"model-a", "model-b"})
+        self.assertEqual(sunday_by_model["model-a"]["observations"], 2)
+        self.assertEqual(
+            set(sunday_by_model["model-a"]["generation_token_usage"]),
+            set(report.TOKEN_KEYS),
+        )
+        self.assertEqual(
+            sunday_by_model["model-a"]["generation_token_usage"]["input"],
+            {"sum": 2, "reported": 2, "missing": 0},
+        )
+        self.assertEqual(
+            sunday_by_model["model-a"]["generation_token_usage"]["output"],
+            {"sum": 2, "reported": 1, "missing": 1},
+        )
+        self.assertEqual(
+            sunday_by_model["model-b"]["generation_token_usage"]["input"],
+            {"sum": 3, "reported": 1, "missing": 0},
+        )
         self.assertEqual(monday["input"], {"sum": None, "reported": 0, "missing": 1})
         self.assertEqual(monday["output"], {"sum": 5, "reported": 1, "missing": 0})
+        monday_by_model = {
+            item["model"]: item
+            for item in monday_bucket["generation_token_usage_by_model"]
+        }
+        self.assertEqual(set(monday_by_model), {"model-a"})
+        self.assertEqual(
+            monday_by_model["model-a"]["generation_token_usage"]["output"],
+            {"sum": 5, "reported": 1, "missing": 0},
+        )
         self.assertEqual(sunday_bucket["reported_total_tokens"], 0)
         self.assertEqual(sunday_bucket["generations_with_total_tokens"], 1)
         self.assertNotIn("reported_total_tokens", monday_bucket)
@@ -475,11 +519,18 @@ class ReportTests(unittest.TestCase):
         by_week = {bucket["week"]: bucket for bucket in result["by_iso_week_utc"]}
         self.assertEqual(
             by_week["2026-W45"]["generation_token_usage"]["input"],
-            {"sum": 3, "reported": 2, "missing": 0},
+            {"sum": 5, "reported": 3, "missing": 0},
         )
         self.assertEqual(
             by_week["2026-W46"]["generation_token_usage"]["output"],
             {"sum": 5, "reported": 1, "missing": 0},
+        )
+        self.assertEqual(
+            [
+                item["model"]
+                for item in by_week["2026-W45"]["generation_token_usage_by_model"]
+            ],
+            ["model-a", "model-b"],
         )
         self.assertEqual(result["coverage"]["unattached_generation_candidates"], 1)
 
