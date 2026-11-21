@@ -403,6 +403,86 @@ class ReportTests(unittest.TestCase):
         self.assertNotIn("turn_details", without_ids)
         self.assertNotIn("session-synthetic", json.dumps(without_ids))
 
+    def test_utc_buckets_report_each_token_field_for_linked_generations(self) -> None:
+        start = dt.datetime(2026, 11, 8, tzinfo=dt.timezone.utc)
+        end = dt.datetime(2026, 11, 10, tzinfo=dt.timezone.utc)
+        rows = [
+            observation(
+                "turn-sunday",
+                "opencode.turn",
+                "AGENT",
+                isRootObservation=True,
+                startTime="2026-11-08T23:59:00Z",
+            ),
+            observation(
+                "gen-sunday",
+                "opencode.generation",
+                "GENERATION",
+                "turn-sunday",
+                startTime="2026-11-08T23:59:10Z",
+                usageDetails={"input": 0, "total": 0},
+            ),
+            observation(
+                "gen-sunday-2",
+                "opencode.generation",
+                "GENERATION",
+                "turn-sunday",
+                startTime="2026-11-08T23:59:20Z",
+                usageDetails={"input": 3, "output": 4},
+            ),
+            observation(
+                "turn-monday",
+                "opencode.turn",
+                "AGENT",
+                isRootObservation=True,
+                startTime="2026-11-09T00:01:00Z",
+            ),
+            observation(
+                "gen-monday",
+                "opencode.generation",
+                "GENERATION",
+                "turn-monday",
+                startTime="2026-11-09T00:01:10Z",
+                usageDetails={"output": 5},
+            ),
+            observation(
+                "unlinked-gen",
+                "opencode.generation",
+                "GENERATION",
+                "missing-parent",
+                startTime="2026-11-09T00:02:00Z",
+                usageDetails={"input": 999, "total": 999},
+            ),
+        ]
+        result = report.build_report([report.select(row) for row in rows], start, end)
+        by_day = {bucket["day"]: bucket for bucket in result["by_day_utc"]}
+        sunday_bucket = by_day["2026-11-08"]
+        monday_bucket = by_day["2026-11-09"]
+        sunday = sunday_bucket["generation_token_usage"]
+        monday = monday_bucket["generation_token_usage"]
+        self.assertEqual(set(sunday), set(report.TOKEN_KEYS))
+        self.assertEqual(sunday_bucket["generation"], 2)
+        self.assertEqual(sunday["input"], {"sum": 3, "reported": 2, "missing": 0})
+        self.assertEqual(sunday["total"], {"sum": 0, "reported": 1, "missing": 1})
+        self.assertEqual(sunday["output"], {"sum": 4, "reported": 1, "missing": 1})
+        self.assertEqual(monday["input"], {"sum": None, "reported": 0, "missing": 1})
+        self.assertEqual(monday["output"], {"sum": 5, "reported": 1, "missing": 0})
+        self.assertEqual(sunday_bucket["reported_total_tokens"], 0)
+        self.assertEqual(sunday_bucket["generations_with_total_tokens"], 1)
+        self.assertNotIn("reported_total_tokens", monday_bucket)
+        self.assertNotIn("2026-11-10", by_day)
+
+        by_week = {bucket["week"]: bucket for bucket in result["by_iso_week_utc"]}
+        self.assertEqual(
+            by_week["2026-W45"]["generation_token_usage"]["input"],
+            {"sum": 3, "reported": 2, "missing": 0},
+        )
+        self.assertEqual(
+            by_week["2026-W46"]["generation_token_usage"]["output"],
+            {"sum": 5, "reported": 1, "missing": 0},
+        )
+        self.assertEqual(result["coverage"]["unattached_generation_candidates"], 1)
+
     def test_empty_page_with_cursor_and_exact_duplicates(self) -> None:
         row = observation("turn", "opencode.turn", "AGENT")
         client = PageClient(
