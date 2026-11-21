@@ -39,6 +39,22 @@ function context(directory, options = {}) {
   };
 }
 
+function exportedSpans(requests) {
+  return requests.flatMap((request) => {
+    const payload = JSON.parse(request);
+    return (payload.resourceSpans ?? []).flatMap((resource) =>
+      (resource.scopeSpans ?? []).flatMap((scope) => scope.spans ?? []),
+    );
+  });
+}
+
+function spanAttributes(span) {
+  return Object.fromEntries((span.attributes ?? []).map(({ key, value }) => [
+    key,
+    value.stringValue ?? value.intValue ?? value.doubleValue ?? value.boolValue,
+  ]));
+}
+
 async function until(predicate, timeout = 10000) {
   const end = Date.now() + timeout;
   while (Date.now() < end) {
@@ -145,4 +161,121 @@ test("real instrumentation rolls back partial hook registration", async () => {
   } finally {
     globalThis.aiObservatoryLangfuseRuntimeState = existing;
   }
+});
+
+test("reported zero and missing usage/cost stay distinct in normal and reload recovery", async (t) => {
+  const requests = [];
+  const server = createServer((req, res) => {
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => {
+      const raw = Buffer.concat(chunks);
+      requests.push((req.headers["content-encoding"] === "gzip" ? gunzipSync(raw) : raw).toString("utf8"));
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end("{}");
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const previousClient = globalThis.aiObservatoryLangfuseRuntimeState;
+  delete globalThis.aiObservatoryLangfuseRuntimeState;
+  let cleanup;
+  t.after(async () => {
+    try {
+      await cleanup?.();
+    } finally {
+      if (previousClient === undefined) delete globalThis.aiObservatoryLangfuseRuntimeState;
+      else globalThis.aiObservatoryLangfuseRuntimeState = previousClient;
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+  const state = context("/synthetic/numeric-provenance");
+  const messages = new Map();
+  state.ctx.session.context = async ({ sessionID }) => messages.get(sessionID) ?? [];
+  cleanup = await activate(state.ctx, {
+    readConfig: async () => ({
+      publicKey: "pk-lf-test",
+      secretKey: "sk-lf-test",
+      baseUrl: `http://127.0.0.1:${server.address().port}`,
+    }),
+  });
+  assert.equal(typeof cleanup, "function");
+
+  const model = { id: "synthetic-model", providerID: "synthetic-provider" };
+  async function promptAndStart(sessionID, messageID) {
+    await state.hooks.prompt({ sessionID, messageID: `u-${messageID}`, prompt: { text: "synthetic" } });
+    state.push("session.step.started", {
+      sessionID,
+      assistantMessageID: messageID,
+      agent: "build",
+      model,
+    });
+    state.push("session.text.ended", { sessionID, assistantMessageID: messageID, text: "synthetic response" });
+  }
+  function generation(messageID) {
+    return exportedSpans(requests).find((span) => {
+      if (span.name !== "opencode.generation") return false;
+      const attributes = spanAttributes(span);
+      try {
+        return JSON.parse(attributes["langfuse.observation.metadata"]).messageID === messageID;
+      } catch {
+        return false;
+      }
+    });
+  }
+  async function waitForGeneration(messageID) {
+    await until(() => generation(messageID));
+    return spanAttributes(generation(messageID));
+  }
+
+  await promptAndStart("normal-missing", "normal-missing-message");
+  state.push("session.step.ended", {
+    sessionID: "normal-missing",
+    assistantMessageID: "normal-missing-message",
+    finish: "stop",
+  });
+  state.push("session.execution.succeeded", { sessionID: "normal-missing" });
+  const normalMissing = await waitForGeneration("normal-missing-message");
+  assert.equal(normalMissing["langfuse.observation.usage_details"], undefined);
+  assert.equal(normalMissing["langfuse.observation.cost_details"], undefined);
+
+  await promptAndStart("normal-zero", "normal-zero-message");
+  state.push("session.step.ended", {
+    sessionID: "normal-zero",
+    assistantMessageID: "normal-zero-message",
+    cost: 0,
+    tokens: { input: 0 },
+    finish: "stop",
+  });
+  state.push("session.execution.succeeded", { sessionID: "normal-zero" });
+  const normalZero = await waitForGeneration("normal-zero-message");
+  assert.deepEqual(JSON.parse(normalZero["langfuse.observation.usage_details"]), { input: 0 });
+  assert.deepEqual(JSON.parse(normalZero["langfuse.observation.cost_details"]), { total: 0 });
+
+  async function recover(sessionID, messageID, numericFields) {
+    messages.set(sessionID, [{
+      type: "assistant",
+      id: messageID,
+      content: [{ type: "text", text: "synthetic response" }],
+      finish: "stop",
+      ...numericFields,
+    }]);
+    await promptAndStart(sessionID, messageID);
+    state.push("session.execution.succeeded", { sessionID });
+    return waitForGeneration(messageID);
+  }
+
+  const recoveredMissing = await recover("recovery-missing", "recovery-missing-message", {});
+  assert.equal(recoveredMissing["langfuse.observation.usage_details"], undefined);
+  assert.equal(recoveredMissing["langfuse.observation.cost_details"], undefined);
+
+  const recoveredZero = await recover("recovery-zero", "recovery-zero-message", {
+    cost: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 }, total: 0 },
+  });
+  assert.deepEqual(JSON.parse(recoveredZero["langfuse.observation.usage_details"]), {
+    input: 0, output: 0, reasoning: 0, cache_read: 0, cache_write: 0, total: 0,
+  });
+  assert.deepEqual(JSON.parse(recoveredZero["langfuse.observation.cost_details"]), { total: 0 });
+  await cleanup();
+  cleanup = undefined;
 });

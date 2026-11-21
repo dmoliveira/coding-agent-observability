@@ -22,8 +22,8 @@ const originalHashes = [
 // Prepared hashes are checked again during activation: an unpatched or unexpected
 // upstream dependency must never silently read unrelated credentials or use Cloud.
 const preparedHashes = [
-  "1191b6652ee103d3d7cf40872e269b999a5c0e6ab4116093e34f0775ab059d69",
-  "10ca52af741def9e059af38b9dfe98260c1c9a6e91802caa91dbb9264f6269a4",
+  "b10de1121c99a394126a446522d711b593ce6e7ba074a120bd46515728efdcb4",
+  "31c16f28410f9551e921fa43143469681f777c47bbbbbdbffecf553a3720d7e9",
 ];
 const digest = (buffer) => createHash("sha256").update(buffer).digest("hex");
 
@@ -67,6 +67,51 @@ function patchRuntime(source) {
   );
   // A process-wide NODE_TLS_REJECT_UNAUTHORIZED=0 must not weaken this exporter.
   source = replaceOnce(source, "return new Agent(options);", "return new Agent({ ...options, rejectUnauthorized: true });");
+  source = replaceOnce(source,
+    `function getCostAttributes(cost) {
+	if (cost > 0) return { "langfuse.observation.cost_details": JSON.stringify({ total: cost }) };
+	return {};
+}`,
+    `function getUsageAttributes(tokens) {
+	if (tokens == null || typeof tokens !== "object") return {};
+	const usage = {};
+	for (const [key, value] of [
+		["input", tokens.input],
+		["output", tokens.output],
+		["reasoning", tokens.reasoning],
+		["cache_read", tokens.cache?.read],
+		["cache_write", tokens.cache?.write],
+		["total", tokens.total]
+	]) if (typeof value === "number" && Number.isFinite(value) && value >= 0) usage[key] = value;
+	return Object.keys(usage).length ? { "langfuse.observation.usage_details": JSON.stringify(usage) } : {};
+}
+function getCostAttributes(cost) {
+	if (typeof cost === "number" && Number.isFinite(cost) && cost >= 0) return { "langfuse.observation.cost_details": JSON.stringify({ total: cost }) };
+	return {};
+}`,
+  );
+  source = replaceOnce(source,
+    `step.span.setAttribute("langfuse.observation.usage_details", JSON.stringify({
+				input: input.tokens.input,
+				output: input.tokens.output,
+				reasoning: input.tokens.reasoning,
+				cache_read: input.tokens.cache.read,
+				cache_write: input.tokens.cache.write,
+				total: input.tokens.total ?? input.tokens.input + input.tokens.output + input.tokens.reasoning
+			}));`,
+    "step.span.setAttributes(getUsageAttributes(input.tokens));",
+  );
+  source = replaceOnce(source,
+    `"langfuse.observation.usage_details": JSON.stringify({
+						input: input.tokens.input,
+						output: input.tokens.output,
+						reasoning: input.tokens.reasoning,
+						cache_read: input.tokens.cache.read,
+						cache_write: input.tokens.cache.write,
+						total: input.tokens.total ?? input.tokens.input + input.tokens.output + input.tokens.reasoning
+					}),`,
+    "...getUsageAttributes(input.tokens),",
+  );
   source = replaceOnce(source,
     "resource: defaultResource().merge(detectResources({ detectors: [envDetector] })).merge(input.serviceName != null ? resourceFromAttributes({ \"service.name\": input.serviceName }) : null),",
     "resource: defaultResource().merge(input.serviceName != null ? resourceFromAttributes({ \"service.name\": input.serviceName }) : null),",
@@ -191,13 +236,13 @@ function patchV2(source) {
 \t\t\t\t\t\tconsole.warn("[AI Observatory] An in-flight generation could not be recovered after reload.");
 \t\t\t\t\t\tcontinue;
 \t\t\t\t\t}
-\t\t\t\t\tconst tokens = message.tokens ?? { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } };
+\t\t\t\t\tconst tokens = message.tokens;
 \t\t\t\t\tlangfuse.traceGeneration({
 \t\t\t\t\t\tsessionID, messageID, parentID: userMessageIDs.get(sessionID) ?? "",
 \t\t\t\t\t\tmodelID: detail.model.id, providerID: detail.model.providerID,
 \t\t\t\t\t\tagent: detail.agent, mode: detail.agent, created: detail.started,
 \t\t\t\t\t\tcompleted: message.time?.completed ?? completed, finish: message.finish,
-\t\t\t\t\t\tcost: message.cost ?? 0, tokens,
+\t\t\t\t\t\tcost: message.cost, tokens,
 \t\t\t\t\t\toutput: [{ role: "assistant", content: message.content }],
 \t\t\t\t\t});
 \t\t\t\t\tgenerationDetails.delete(messageID);
