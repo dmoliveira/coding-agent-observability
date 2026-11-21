@@ -2,6 +2,8 @@
 
 The measured dashboards and report use existing Langfuse data. They **do not call an LLM, add evaluation rules, request observation input/output, or backfill scores**. They do not need LM Studio to run. The optional evaluator below is separate. The independent [span-classification demo](../README.md#example-classify-spans-on-a-dashboard) remains scoped to synthetic spans.
 
+The source-backed [capability and instrumentation matrix](https://github.com/dmoliveira/coding-agent-observability/blob/main/docs/specs/harness-capability-matrix.md) defines planned C1/C2/C10 inventory contracts and documents paths that are only partially observed or currently opaque. It is a specification, not a live capability listing or dashboard.
+
 ## Dashboards
 
 After connecting the global OpenCode plugin and starting Langfuse, run:
