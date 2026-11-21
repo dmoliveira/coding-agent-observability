@@ -100,6 +100,10 @@ The separate `task_attestations` section reports counts by kind, status, validat
 
 The report never discovers such files, writes them, sends them to Langfuse or an LLM, or schedules processing. Selecting a file authorizes only that one read; the file and output remain the operator's responsibility. The existing unknown-outcome caveats remain valid for runtime observations even when attestations are supplied.
 
+## Metric contract
+
+The normative metric schema, identity/outcome rules and atomic component registry live in `docs/specs/harness-metric-contracts.md` and `docs/specs/harness-metric-contracts.json`. The registry preserves all 82 family IDs and owners as 262 single-unit components. `planned` components are not collected or validated merely because they appear in the registry; existing pre-v1.1 outputs are marked `implemented` with legacy conformance, not as v1.1-validated. Check each component's source readiness and delivery evidence before making dashboard claims.
+
 ## Optional local-model judgments
 
 On macOS with LM Studio running on `127.0.0.1:1234` and LM Link offline, try three **synthetic** cases using the same default local model as the existing demo:
