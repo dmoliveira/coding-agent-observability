@@ -168,6 +168,41 @@ class TaskEvidenceTests(unittest.TestCase):
         )
         self.assertEqual(value["tasks"][1]["bindings"], [linked, ambiguous])
 
+    def test_snapshot_freshness_is_informational_and_handles_future_timestamps(
+        self,
+    ) -> None:
+        computed_at = dt.datetime(2026, 11, 21, 12, tzinfo=dt.timezone.utc)
+        current = task_evidence.validate(
+            {**snapshot(), "as_of": "2026-11-21T11:00:00Z"}
+        )
+        summary = task_evidence.summarize(current, set(), computed_at=computed_at)
+        self.assertEqual(summary["freshness"]["age_seconds"], 60 * 60)
+        self.assertFalse(summary["freshness"]["future_dated"])
+        self.assertIn("no stale threshold", summary["freshness"]["interpretation"])
+
+        future = task_evidence.validate({**snapshot(), "as_of": "2026-11-21T12:15:00Z"})
+        summary = task_evidence.summarize(future, set(), computed_at=computed_at)
+        self.assertEqual(summary["freshness"]["age_seconds"], -15 * 60)
+        self.assertTrue(summary["freshness"]["future_dated"])
+        with self.assertRaisesRegex(ValueError, "must include a timezone"):
+            task_evidence.summarize(
+                future,
+                set(),
+                computed_at=dt.datetime(2026, 11, 21, 12),  # noqa: DTZ001
+            )
+
+    def test_report_freshness_uses_the_report_computation_timestamp(self) -> None:
+        start = dt.datetime(2026, 11, 19, tzinfo=dt.timezone.utc)
+        end = dt.datetime(2026, 11, 21, tzinfo=dt.timezone.utc)
+        value = task_evidence.validate(snapshot())
+        report = agent_report.build_report([], start, end, task_snapshot=value)
+        computed_at = dt.datetime.fromisoformat(report["computed_at"])
+        as_of = dt.datetime.fromisoformat(report["task_attestations"]["as_of"])
+        self.assertEqual(
+            report["task_attestations"]["freshness"]["age_seconds"],
+            (computed_at - as_of).total_seconds(),
+        )
+
     def test_report_has_no_attestations_without_explicit_input(self) -> None:
         start = dt.datetime(2026, 11, 19, tzinfo=dt.timezone.utc)
         end = dt.datetime(2026, 11, 21, tzinfo=dt.timezone.utc)
