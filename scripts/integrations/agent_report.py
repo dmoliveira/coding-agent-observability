@@ -613,6 +613,12 @@ def build_report(
     weekly: dict[str, Counter] = defaultdict(Counter)
     daily_generations: dict[str, list[dict[str, Any]]] = defaultdict(list)
     weekly_generations: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    daily_generation_models: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(
+        dict
+    )
+    weekly_generation_models: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(
+        dict
+    )
     missing_start = 0
     missing_generation_start = 0
     for row in [*turns, *linked, *runtime_events]:
@@ -637,10 +643,14 @@ def build_report(
         if category == "generation":
             daily_generations[day].append(row)
             weekly_generations[iso_week].append(row)
+            model = safe_name(row.get("model"))
+            daily_generation_models[day].setdefault(model, []).append(row)
+            weekly_generation_models[iso_week].setdefault(model, []).append(row)
 
     def time_buckets(
         counts: dict[str, Counter],
         generation_rows: dict[str, list[dict[str, Any]]],
+        generation_models: dict[str, dict[str, list[dict[str, Any]]]],
         key: str,
     ) -> list[dict[str, Any]]:
         return [
@@ -650,6 +660,16 @@ def build_report(
                 "generation_token_usage": usage_summary(
                     generation_rows.get(bucket, [])
                 ),
+                "generation_token_usage_by_model": [
+                    {
+                        "model": model,
+                        "observations": len(model_rows),
+                        "generation_token_usage": usage_summary(model_rows),
+                    }
+                    for model, model_rows in sorted(
+                        generation_models.get(bucket, {}).items()
+                    )
+                ],
             }
             for bucket, bucket_counts in sorted(counts.items())
         ]
@@ -747,8 +767,12 @@ def build_report(
             ),
             "interpretation": "Uncovered time excludes observed linked child intervals only; it is not proof of a human, tool, service or unnecessary wait.",
         },
-        "by_day_utc": time_buckets(daily, daily_generations, "day"),
-        "by_iso_week_utc": time_buckets(weekly, weekly_generations, "week"),
+        "by_day_utc": time_buckets(
+            daily, daily_generations, daily_generation_models, "day"
+        ),
+        "by_iso_week_utc": time_buckets(
+            weekly, weekly_generations, weekly_generation_models, "week"
+        ),
         "unknown": {
             "task_completion": "Turn end and non-error level do not establish task success.",
             "task_epic_links": "Explicit task hierarchy is not available in these observations.",
