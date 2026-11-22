@@ -1,0 +1,39 @@
+{
+  "schema_version": "aiobs.synthetic-fixture-pack.v1",
+  "fixture_pack_id": "task-evidence-synthetic",
+  "fixture_pack_version": "1.0.0",
+  "rubric_id": "task-evidence-v1",
+  "rubric_version": "1.0.0",
+  "cases": [
+    {
+      "fixture_id": "synthetic-completed",
+      "input": {
+        "case_id": "synthetic-completed",
+        "task": "Add a greeting function and run its unit test.",
+        "result": "Added the greeting function. The task is complete.",
+        "checks": "Unit test passed.",
+        "observations": "No blocker or rework was reported."
+      }
+    },
+    {
+      "fixture_id": "synthetic-blocked",
+      "input": {
+        "case_id": "synthetic-blocked",
+        "task": "Update the service configuration and verify the change.",
+        "result": "Could not update the service because access was denied; the task is not complete.",
+        "checks": "No verification was run.",
+        "observations": "The operator must grant access before work can continue."
+      }
+    },
+    {
+      "fixture_id": "synthetic-unclear",
+      "input": {
+        "case_id": "synthetic-unclear",
+        "task": "Make it better.",
+        "result": "Asked for clarification and made no changes.",
+        "checks": "No checks were reported.",
+        "observations": "The objective and acceptance criteria were unspecified."
+      }
+    }
+  ]
+}
