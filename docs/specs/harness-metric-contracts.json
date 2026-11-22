@@ -3033,8 +3033,8 @@
           "contract_conformance": "legacy",
           "delivery_state": "implemented",
           "delivery_evidence": [
-            "scripts/integrations/agent_report.py::build_report",
-            "tests/test_agent_observability.py::ReportTests.test_generations_without_valid_start_time_are_counted_but_not_bucketed"
+            "scripts/integrations/agent_report.py::usage_summary",
+            "tests/test_agent_observability.py::ReportTests.test_schema_two_is_opt_in_for_exclusive_token_missingness"
           ],
           "delivery_reason": "Existing repository code emits/computes this legacy component, but its output has not yet been migrated to the v1.1 metric-instance schema.",
           "source_requirement": "Existing bounded structural report; preserve its source window, identity and coverage limits. New source-native instrumentation/adapter is required; do not infer absent identities or events.",

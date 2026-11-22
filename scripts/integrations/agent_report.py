@@ -5,9 +5,11 @@ from __future__ import annotations
 import argparse
 import contextlib
 import datetime as dt
+import hmac
 import json
 import math
 import re
+import secrets
 import signal
 import sys
 import threading
@@ -26,6 +28,8 @@ from integrations import span_dashboard, task_evidence
 UTC = dt.timezone.utc
 FIELDS = "basic,model,usage,metrics"
 TOKEN_KEYS = ("input", "output", "total", "reasoning", "cache_read", "cache_write")
+REPORT_SCHEMA_VERSIONS = ("1.0", "2.0")
+DEFAULT_REPORT_SCHEMA_VERSION = "1.0"
 SELECTED = (
     "id",
     "traceId",
@@ -164,6 +168,8 @@ def timestamp(value: str) -> dt.datetime:
 def scalar_number(value: Any) -> float | int | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
     if not math.isfinite(value) or value < 0:
         return None
     return value
@@ -201,12 +207,53 @@ def select(row: Any) -> dict[str, Any]:
         selected["isRootObservation"] = None
     selected["latency"] = scalar_number(selected["latency"])
     usage = row.get("usageDetails")
-    selected["usageDetails"] = {
-        key: scalar_number(usage.get(key)) if isinstance(usage, dict) else None
-        for key in TOKEN_KEYS
-    }
+    usage_values = {}
+    excluded_usage_keys = []
+    for key in TOKEN_KEYS:
+        if isinstance(usage, dict):
+            raw_value = usage.get(key)
+            present = key in usage and raw_value is not None
+        else:
+            raw_value = None
+            present = usage is not None
+        value = scalar_number(raw_value)
+        usage_values[key] = value
+        if present and value is None:
+            excluded_usage_keys.append(key)
+    selected["usageDetails"] = usage_values
+    selected["usageDetailsExcluded"] = tuple(excluded_usage_keys)
     # Never retain statusMessage, metadata, input, output, or arbitrary API fields.
     return selected
+
+
+def invalid_usage_fingerprint(usage: Any, key: bytes) -> bytes:
+    """Compare rejected usage values without retaining or emitting their contents."""
+    if isinstance(usage, dict):
+        invalid_values = {
+            field: usage[field]
+            for field in TOKEN_KEYS
+            if field in usage
+            and usage[field] is not None
+            and scalar_number(usage[field]) is None
+        }
+    elif usage is not None:
+        invalid_values = {"$container": usage}
+    else:
+        return b""
+    if not invalid_values:
+        return b""
+    try:
+        encoded = json.dumps(
+            invalid_values,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=True,
+        ).encode("utf-8")
+    except (TypeError, ValueError, OverflowError, RecursionError):
+        raise ValueError(
+            "Langfuse returned usage details that cannot be compared safely."
+        ) from None
+    return hmac.new(key, encoded, "sha256").digest()
 
 
 def fetch_observations(
@@ -231,6 +278,8 @@ def fetch_observations(
             raise ValueError("Invalid OpenCode session ID.")
         params["sessionId"] = session_id
     result: dict[tuple[str, str], dict[str, Any]] = {}
+    duplicate_fingerprints: dict[tuple[str, str], bytes] = {}
+    fingerprint_key = secrets.token_bytes(32)
     cursors: set[str] = set()
     duplicates = 0
     previous_response_bytes = getattr(client, "response_bytes_received", None)
@@ -272,14 +321,18 @@ def fetch_observations(
         for item in rows:
             row = select(item)
             key = (row["traceId"], row["id"])
+            fingerprint = invalid_usage_fingerprint(
+                item.get("usageDetails"), fingerprint_key
+            )
             if key in result:
-                if result[key] != row:
+                if result[key] != row or duplicate_fingerprints[key] != fingerprint:
                     raise ValueError(
                         "An observation changed during the scan; retry the report."
                     )
                 duplicates += 1
             else:
                 result[key] = row
+                duplicate_fingerprints[key] = fingerprint
             if len(result) > maximum:
                 raise BudgetExceeded(
                     "Observation row budget exceeded; narrow the window or raise the limit."
@@ -349,18 +402,30 @@ def latency_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def usage_summary(
-    rows: list[dict[str, Any]], keys: tuple[str, ...] = TOKEN_KEYS
+    rows: list[dict[str, Any]],
+    keys: tuple[str, ...] = TOKEN_KEYS,
+    *,
+    schema_version: str = DEFAULT_REPORT_SCHEMA_VERSION,
 ) -> dict[str, Any]:
     result = {}
     for key in keys:
         values = [
             value for row in rows if (value := row["usageDetails"].get(key)) is not None
         ]
-        result[key] = {
+        excluded = sum(key in row.get("usageDetailsExcluded", ()) for row in rows)
+        summary = {
             "sum": sum(values) if values else None,
             "reported": len(values),
-            "missing": len(rows) - len(values),
         }
+        if schema_version == "1.0":
+            # Preserve the legacy meaning: invalid non-null values count as missing.
+            summary["missing"] = len(rows) - len(values)
+        elif schema_version == "2.0":
+            summary["missing"] = len(rows) - len(values) - excluded
+            summary["excluded"] = excluded
+        else:
+            raise ValueError("Unsupported report schema version.")
+        result[key] = summary
     return result
 
 
@@ -369,6 +434,8 @@ def task_generation_usage(
     turns: set[tuple[str, str]],
     attached: dict[tuple[str, str], list[dict[str, Any]]],
     cycle_affected: dict[tuple[str, str], bool],
+    *,
+    schema_version: str = DEFAULT_REPORT_SCHEMA_VERSION,
 ) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
     owners = task_evidence.binding_owners(snapshot)
     unique = {key for key, tasks in owners.items() if len(tasks) == 1}
@@ -392,7 +459,7 @@ def task_generation_usage(
             "turns_without_observed_generations": sum(
                 not generations({key}) for key in keys
             ),
-            "reported_tokens": usage_summary(rows),
+            "reported_tokens": usage_summary(rows, schema_version=schema_version),
         }
 
     overall = {
@@ -520,7 +587,11 @@ def enforce_group_budget(rows: list[dict[str, Any]], field: str, label: str) -> 
 
 
 def by_name(
-    rows: list[dict[str, Any]], field: str, *, include_usage: bool = False
+    rows: list[dict[str, Any]],
+    field: str,
+    *,
+    include_usage: bool = False,
+    schema_version: str = DEFAULT_REPORT_SCHEMA_VERSION,
 ) -> list[dict[str, Any]]:
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -529,7 +600,9 @@ def by_name(
     for name, group in sorted(groups.items()):
         item = {"name": name, **group_summary(group)}
         if include_usage:
-            item["reported_tokens"] = usage_summary(group)
+            item["reported_tokens"] = usage_summary(
+                group, schema_version=schema_version
+            )
         result.append(item)
     return result
 
@@ -631,7 +704,10 @@ def build_report(
     session_scoped: bool = False,
     task_snapshot: dict[str, Any] | None = None,
     budget: ReportBudget | None = None,
+    schema_version: str = DEFAULT_REPORT_SCHEMA_VERSION,
 ) -> dict[str, Any]:
+    if schema_version not in REPORT_SCHEMA_VERSIONS:
+        raise ValueError("Unsupported report schema version.")
     if budget is not None:
         budget.check()
     if len(rows) > MAX_OBSERVATIONS:
@@ -830,13 +906,15 @@ def build_report(
                 key: bucket,
                 **dict(bucket_counts),
                 "generation_token_usage": usage_summary(
-                    generation_rows.get(bucket, [])
+                    generation_rows.get(bucket, []), schema_version=schema_version
                 ),
                 "generation_token_usage_by_model": [
                     {
                         "model": model,
                         "observations": len(model_rows),
-                        "generation_token_usage": usage_summary(model_rows),
+                        "generation_token_usage": usage_summary(
+                            model_rows, schema_version=schema_version
+                        ),
                     }
                     for model, model_rows in sorted(
                         generation_models.get(bucket, {}).items()
@@ -848,7 +926,7 @@ def build_report(
 
     computed_at = dt.datetime.now(UTC)
     report: dict[str, Any] = {
-        "schema_version": "1.0",
+        "schema_version": schema_version,
         "source": "langfuse-v2-observations",
         "expected_langfuse_version": "4.82.0",
         "computed_at": computed_at.isoformat(),
@@ -897,8 +975,15 @@ def build_report(
         "all_turns": group_summary(turns),
         "linked_generations": {
             **group_summary(generations),
-            "reported_tokens": usage_summary(generations),
-            "by_model": by_name(generations, "model", include_usage=True),
+            "reported_tokens": usage_summary(
+                generations, schema_version=schema_version
+            ),
+            "by_model": by_name(
+                generations,
+                "model",
+                include_usage=True,
+                schema_version=schema_version,
+            ),
         },
         "linked_tools": {**group_summary(tools), "by_name": by_name(tools, "name")},
         "linked_retry_events": len(retries),
@@ -911,6 +996,7 @@ def build_report(
             "compaction_reported_tokens": usage_summary(
                 compaction_events,
                 ("input", "output", "reasoning", "cache_read", "cache_write"),
+                schema_version=schema_version,
             ),
             "permission_waits": permission_wait_summary(runtime_events),
             "coverage": "unknown; opt-in live capture may be disabled, interrupted or lose events",
@@ -965,6 +1051,7 @@ def build_report(
             {(turn["traceId"], turn["id"]) for turn in turns},
             attached,
             cycle_affected,
+            schema_version=schema_version,
         )
         report["task_attestations"]["conditional_generation_usage"] = usage
         if include_identifiers:
@@ -1009,7 +1096,8 @@ def build_report(
                         for row in timeline
                     ],
                     "reported_tokens": usage_summary(
-                        [row for row in children if kind(row) == "generation"]
+                        [row for row in children if kind(row) == "generation"],
+                        schema_version=schema_version,
                     ),
                 }
             )
@@ -1028,7 +1116,8 @@ def build_report(
                     )
                 ),
                 "reported_tokens": usage_summary(
-                    [row for row in group if kind(row) == "generation"]
+                    [row for row in group if kind(row) == "generation"],
+                    schema_version=schema_version,
                 ),
             }
             for session, group in sorted(sessions.items())
@@ -1076,6 +1165,12 @@ def main(argv: list[str] | None = None) -> None:
         type=int,
         default=DEFAULT_MAX_OBSERVATIONS,
         help=f"Fail rather than truncate after this many observations (1–{MAX_OBSERVATIONS})",
+    )
+    parser.add_argument(
+        "--schema-version",
+        choices=REPORT_SCHEMA_VERSIONS,
+        default=DEFAULT_REPORT_SCHEMA_VERSION,
+        help="Report contract (2.0 opts in to disjoint token missing/excluded counts)",
     )
     parser.add_argument(
         "--include-identifiers",
@@ -1128,6 +1223,7 @@ def main(argv: list[str] | None = None) -> None:
                 session_scoped=args.session_id is not None,
                 task_snapshot=snapshot,
                 budget=budget,
+                schema_version=args.schema_version,
             )
             output = serialize_report(result, budget=budget)
         # stdout transport can stall or fail; it is outside the report deadline.

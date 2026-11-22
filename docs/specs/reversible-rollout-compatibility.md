@@ -28,12 +28,12 @@ This plan does not authorize a custom browser viewer. Use the authenticated Lang
 ## Report schema and version policy
 
 1. **Freeze the current default.** Until consumers are inventoried and tested, default output remains schema `1.0` with the current shape and values. Do not silently switch the default or rewrite saved reports.
-2. **Introduce an opt-in additive revision.** A future implementation may expose `--schema-version 1.1` (exact CLI syntax remains to be implemented). Version `1.1` must preserve every `1.0` key, type, value meaning, and legacy total-token key, and may add fields only. A consumer must explicitly declare support for `1.0`, `1.1`, or both; do not assume strict consumers ignore unknown fields.
+2. **Introduce opt-in revisions.** An additive implementation may expose `--schema-version 1.1`. Version `1.1` must preserve every `1.0` key, type, value meaning, and legacy total-token key, and may add fields only. A breaking semantic revision may use `--schema-version 2.0`; it must document every changed meaning and provide an explicit migration/consumer plan. Both remain opt-in, and a consumer must explicitly declare support for each version; do not assume strict consumers ignore unknown fields.
 3. **Separate versions by responsibility.** The report envelope should carry independent `definition_version` (metric formulas/populations) and `transform_version` (code mapping source rows to output), in addition to its schema version and existing source-version fields. Dashboard code should have its own `dashboard_definition_version`; do not overload the report transform version or invent unsupported Langfuse API metadata fields.
-4. **Version semantic changes.** Adding a field without changing prior meanings is a minor additive revision. Removing/renaming a field, changing a formula/population, changing missingness, or changing attribution is a breaking revision and requires a new major schema plus an explicit migration/consumer plan. Increment definition and transform versions independently when only one changes.
+4. **Version semantic changes.** Adding a field without changing prior meanings is a minor additive revision. Removing/renaming a field, changing a formula/population, changing missingness, or changing attribution is a breaking revision and requires a new major schema plus an explicit migration/consumer plan. For token coverage, schema `1.0` keeps its legacy `missing` meaning; schema `2.0` may distinguish absent/null `missing` from present-invalid `excluded` only when explicitly selected. Increment definition and transform versions independently when only one changes.
 5. **Preserve historical evidence.** Treat each generated report as a point-in-time snapshot of its own source window, versions, and computation time; saved copies remain operator-owned. Do not auto-migrate, recompute, or backfill historical reports. Mixed-version consumers dispatch by each report's declared schema and retain unknown/unavailable values rather than coercing them to zero.
 
-The exact `1.1` schema and consumer inventory must be reviewed before implementation. If compatibility cannot be proven, retain `1.0` and defer the new output rather than weakening validation.
+The exact `1.1` schema and consumer inventory must be reviewed before implementation. Any `2.0` implementation must have synthetic compatibility tests and document its changed semantics and opt-in control. If compatibility cannot be proven, retain the `1.0` default and defer the new output rather than weakening validation.
 
 ## Incremental rollout and switches
 
@@ -41,6 +41,7 @@ The exact `1.1` schema and consumer inventory must be reviewed before implementa
 | --- | --- | --- | --- |
 | Existing report | No new switch; freeze the existing `1.0` contract. | On as today | Revert code only if a regression is found; historical output is untouched. |
 | Additive report fields | Explicit per-run schema selection, initially opt-in `1.1`. | `1.0` | Select `1.0` or use the prior code; no report files are rewritten. |
+| Breaking report semantics | Explicit per-run major schema selection (for token missingness, `2.0`). | `1.0` | Select `1.0`; no report files are rewritten or migrated. |
 | New native view/resource | Per-view enable switch, separate from applying definitions; require a reviewed dry-run and explicit apply. | Off | Disable the view. Restore prior definitions only for still-owned, unchanged resources; retain new resources rather than deleting them. |
 | New producer or independent evaluation | Its own source/readiness gate and switch, outside this plan. | Off/unavailable | Disable that producer/evaluation only; retain already-recorded evidence and annotations. |
 

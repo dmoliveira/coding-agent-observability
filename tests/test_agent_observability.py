@@ -464,6 +464,167 @@ class ReportTests(unittest.TestCase):
         self.assertNotIn("turn_details", without_ids)
         self.assertNotIn("session-synthetic", json.dumps(without_ids))
 
+    def test_token_usage_separates_reported_missing_and_excluded_values(self) -> None:
+        selected = report.select(
+            observation(
+                "generation",
+                "opencode.generation",
+                "GENERATION",
+                usageDetails={
+                    "input": 0,
+                    "output": None,
+                    "total": "SYNTHETIC_INVALID_TOKEN",
+                    "reasoning": -1,
+                    "cache_read": True,
+                    "cache_write": float("inf"),
+                    "uncontracted": "SYNTHETIC_SECRET",
+                },
+            )
+        )
+
+        selected_json = json.dumps(selected, allow_nan=False)
+        self.assertNotIn("SYNTHETIC_INVALID_TOKEN", selected_json)
+        self.assertNotIn("SYNTHETIC_SECRET", selected_json)
+        self.assertEqual(
+            selected["usageDetailsExcluded"],
+            ("total", "reasoning", "cache_read", "cache_write"),
+        )
+
+        usage = report.usage_summary([selected], schema_version="2.0")
+        self.assertEqual(
+            usage["input"],
+            {"sum": 0, "reported": 1, "missing": 0, "excluded": 0},
+        )
+        self.assertEqual(
+            usage["output"],
+            {"sum": None, "reported": 0, "missing": 1, "excluded": 0},
+        )
+        for key in ("total", "reasoning", "cache_read", "cache_write"):
+            self.assertEqual(
+                usage[key],
+                {"sum": None, "reported": 0, "missing": 0, "excluded": 1},
+            )
+
+        malformed_map = report.select(
+            observation(
+                "malformed-map",
+                "opencode.generation",
+                "GENERATION",
+                usageDetails="SYNTHETIC_INVALID_CONTAINER",
+            )
+        )
+        self.assertNotIn("SYNTHETIC_INVALID_CONTAINER", json.dumps(malformed_map))
+        self.assertEqual(
+            report.usage_summary([malformed_map], schema_version="2.0")["input"],
+            {"sum": None, "reported": 0, "missing": 0, "excluded": 1},
+        )
+
+    def test_schema_two_is_opt_in_for_exclusive_token_missingness(self) -> None:
+        rows = [
+            report.select(
+                observation("turn", "opencode.turn", "AGENT", isRootObservation=True)
+            ),
+            report.select(
+                observation(
+                    "generation",
+                    "opencode.generation",
+                    "GENERATION",
+                    "turn",
+                    usageDetails={
+                        "input": 0,
+                        "output": None,
+                        "total": "SYNTHETIC_INVALID_TOKEN",
+                    },
+                )
+            ),
+        ]
+
+        legacy = report.build_report(rows, self.start, self.end)
+        version_two = report.build_report(
+            rows, self.start, self.end, schema_version="2.0"
+        )
+        legacy_tokens = legacy["linked_generations"]["reported_tokens"]
+        version_two_tokens = version_two["linked_generations"]["reported_tokens"]
+
+        self.assertEqual(legacy["schema_version"], "1.0")
+        self.assertEqual(version_two["schema_version"], "2.0")
+        self.assertEqual(
+            legacy_tokens["total"],
+            {"sum": None, "reported": 0, "missing": 1},
+        )
+        self.assertEqual(
+            version_two_tokens["total"],
+            {"sum": None, "reported": 0, "missing": 0, "excluded": 1},
+        )
+        self.assertEqual(
+            version_two_tokens["input"],
+            {"sum": 0, "reported": 1, "missing": 0, "excluded": 0},
+        )
+        self.assertEqual(
+            version_two_tokens["output"],
+            {"sum": None, "reported": 0, "missing": 1, "excluded": 0},
+        )
+        self.assertNotIn("excluded", legacy_tokens["total"])
+        self.assertNotIn("SYNTHETIC_INVALID_TOKEN", json.dumps(version_two))
+
+    def test_cli_schema_version_selects_the_requested_report_contract(self) -> None:
+        rows = [
+            report.select(
+                observation("turn", "opencode.turn", "AGENT", isRootObservation=True)
+            ),
+            report.select(
+                observation(
+                    "generation",
+                    "opencode.generation",
+                    "GENERATION",
+                    "turn",
+                    usageDetails={"input": "SYNTHETIC_INVALID_TOKEN"},
+                )
+            ),
+        ]
+        output = io.StringIO()
+
+        with (
+            mock.patch.object(
+                report.common,
+                "report_query_lock",
+                return_value=contextlib.nullcontext(),
+            ),
+            mock.patch.object(
+                report,
+                "enforce_wall_time_budget",
+                return_value=contextlib.nullcontext(),
+            ),
+            mock.patch.object(
+                report.span_dashboard,
+                "context",
+                return_value=(object(), None, None),
+            ),
+            mock.patch.object(
+                report, "fetch_observations", return_value=(rows, 0)
+            ) as fetch,
+            contextlib.redirect_stdout(output),
+        ):
+            report.main(
+                [
+                    "--from-time",
+                    self.start.isoformat(),
+                    "--to-time",
+                    self.end.isoformat(),
+                    "--schema-version",
+                    "2.0",
+                ]
+            )
+
+        result = json.loads(output.getvalue())
+        self.assertEqual(result["schema_version"], "2.0")
+        self.assertEqual(
+            result["linked_generations"]["reported_tokens"]["input"],
+            {"sum": None, "reported": 0, "missing": 0, "excluded": 1},
+        )
+        self.assertNotIn("SYNTHETIC_INVALID_TOKEN", output.getvalue())
+        fetch.assert_called_once()
+
     def test_utc_buckets_report_each_token_field_for_linked_generations(self) -> None:
         start = dt.datetime(2026, 11, 8, tzinfo=dt.timezone.utc)
         end = dt.datetime(2026, 11, 10, tzinfo=dt.timezone.utc)
@@ -516,7 +677,7 @@ class ReportTests(unittest.TestCase):
                 "turn-monday",
                 startTime="2026-11-09T00:01:10Z",
                 model="model-a",
-                usageDetails={"output": 5},
+                usageDetails={"output": 5, "reasoning": "SYNTHETIC_INVALID_TOKEN"},
             ),
             observation(
                 "unlinked-gen",
@@ -536,9 +697,18 @@ class ReportTests(unittest.TestCase):
         monday = monday_bucket["generation_token_usage"]
         self.assertEqual(set(sunday), set(report.TOKEN_KEYS))
         self.assertEqual(sunday_bucket["generation"], 3)
-        self.assertEqual(sunday["input"], {"sum": 5, "reported": 3, "missing": 0})
-        self.assertEqual(sunday["total"], {"sum": 0, "reported": 1, "missing": 2})
-        self.assertEqual(sunday["output"], {"sum": 6, "reported": 2, "missing": 1})
+        self.assertEqual(
+            sunday["input"],
+            {"sum": 5, "reported": 3, "missing": 0},
+        )
+        self.assertEqual(
+            sunday["total"],
+            {"sum": 0, "reported": 1, "missing": 2},
+        )
+        self.assertEqual(
+            sunday["output"],
+            {"sum": 6, "reported": 2, "missing": 1},
+        )
         sunday_by_model = {
             item["model"]: item
             for item in sunday_bucket["generation_token_usage_by_model"]
@@ -561,8 +731,19 @@ class ReportTests(unittest.TestCase):
             sunday_by_model["model-b"]["generation_token_usage"]["input"],
             {"sum": 3, "reported": 1, "missing": 0},
         )
-        self.assertEqual(monday["input"], {"sum": None, "reported": 0, "missing": 1})
-        self.assertEqual(monday["output"], {"sum": 5, "reported": 1, "missing": 0})
+        self.assertEqual(
+            monday["input"],
+            {"sum": None, "reported": 0, "missing": 1},
+        )
+        self.assertEqual(
+            monday["output"],
+            {"sum": 5, "reported": 1, "missing": 0},
+        )
+        self.assertEqual(
+            monday["reasoning"],
+            {"sum": None, "reported": 0, "missing": 1},
+        )
+        self.assertNotIn("SYNTHETIC_INVALID_TOKEN", json.dumps(result))
         monday_by_model = {
             item["model"]: item
             for item in monday_bucket["generation_token_usage_by_model"]
@@ -645,18 +826,41 @@ class ReportTests(unittest.TestCase):
 
     def test_empty_page_with_cursor_and_exact_duplicates(self) -> None:
         row = observation("turn", "opencode.turn", "AGENT")
+        changed_discarded_field = {**row, "statusMessage": "SYNTHETIC_DISCARDED"}
         client = PageClient(
             [
-                {"data": [row], "meta": {"cursor": "first"}},
+                {"data": [row, row], "meta": {"cursor": "first"}},
                 {"data": [], "meta": {"cursor": "second"}},
-                {"data": [row], "meta": {}},
+                {"data": [changed_discarded_field], "meta": {}},
             ]
         )
         result, duplicates = report.fetch_observations(client, self.start, self.end, 10)
-        self.assertEqual((len(result), duplicates, len(client.requests)), (1, 1, 3))
+        self.assertEqual((len(result), duplicates, len(client.requests)), (1, 2, 3))
+        self.assertNotIn("SYNTHETIC_DISCARDED", json.dumps(result))
         query = urllib.parse.parse_qs(urllib.parse.urlsplit(client.requests[0]).query)
         self.assertEqual(query["fields"], ["basic,model,usage,metrics"])
         self.assertNotIn("io", query["fields"][0].split(","))
+
+    def test_changed_invalid_usage_value_is_not_miscounted_as_exact_duplicate(
+        self,
+    ) -> None:
+        row = observation(
+            "generation",
+            "opencode.generation",
+            "GENERATION",
+            usageDetails={"input": "SYNTHETIC_INVALID_FIRST"},
+        )
+        changed = {**row, "usageDetails": {"input": "SYNTHETIC_INVALID_SECOND"}}
+        client = PageClient(
+            [
+                {"data": [row], "meta": {"cursor": "next"}},
+                {"data": [changed], "meta": {}},
+            ]
+        )
+
+        with self.assertRaisesRegex(ValueError, "changed during the scan") as raised:
+            report.fetch_observations(client, self.start, self.end, 10)
+        self.assertNotIn("SYNTHETIC_INVALID", str(raised.exception))
 
     def test_conflicting_duplicate_cycle_and_truncation_fail_closed(self) -> None:
         row = observation("turn", "opencode.turn", "AGENT")
@@ -807,6 +1011,7 @@ class ReportTests(unittest.TestCase):
         self.assertIsNone(report.scalar_number(True))
         self.assertIsNone(report.scalar_number(float("nan")))
         self.assertIsNone(report.scalar_number(-1))
+        self.assertEqual(report.scalar_number(10**1000), 10**1000)
         self.assertEqual(report.percentile([5, 1, 3, 2, 4], 0.95), 5)
         with self.assertRaisesRegex(ValueError, "timezone"):
             report.timestamp("2026-11-20T00:00:00")
