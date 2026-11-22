@@ -1,6 +1,6 @@
 # Synthetic harness benchmark contract
 
-**State:** versioned offline fixture and pair-eligibility contract; no benchmark runner, model execution, real-evidence adapter, or metric delivery is implemented here.
+**State:** versioned offline fixture and pair-eligibility contract, with offline synthetic judgment-calibration and paired-summary helpers; no benchmark runner, model execution, real-evidence adapter, or metric delivery is implemented here.
 **Owners:** `task_6288` (fixtures and pair eligibility), `task_6298` (synthetic judgment calibration), and `task_6299` (offline paired summaries); plans `memory_411`, `memory_412`; shared metric contract `memory_398`.
 **Fixture artifacts:** [`tests/fixtures/harness-benchmark/v1/`](../../tests/fixtures/harness-benchmark/v1/).
 
