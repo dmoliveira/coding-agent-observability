@@ -339,7 +339,8 @@ class TaskEvidenceTests(unittest.TestCase):
         self.assertEqual(usage["eligible_turns"], 2)
         self.assertEqual(usage["recorded_generation_observations"], 2)
         self.assertEqual(
-            usage["reported_tokens"]["input"], {"sum": 30, "reported": 2, "missing": 0}
+            usage["reported_tokens"]["input"],
+            {"sum": 30, "reported": 2, "missing": 0},
         )
         self.assertEqual(usage["reported_tokens"]["total"]["sum"], 37)
         self.assertEqual(usage["ambiguous_bindings_excluded"], 1)
