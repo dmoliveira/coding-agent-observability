@@ -19,7 +19,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import common
 
-from integrations import agent_dashboard, agent_dashboard_definition, span_dashboard
+from integrations import (
+    agent_dashboard,
+    agent_dashboard_definition,
+    agent_query,
+    span_dashboard,
+)
 from integrations import agent_report as report
 
 
@@ -1084,6 +1089,333 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(result["invalid_timestamps"], 1)
         self.assertEqual(result["reply_before_ask"], 1)
         self.assertEqual(result["request_groups"], 7)
+
+
+class GeneratedQueryClient:
+    def __init__(self, count: int, kind: str) -> None:
+        self.count = count
+        self.kind = kind
+        self.response_bytes_received = 0
+        self.requests = 0
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        timeout: float = 30,
+        max_response_bytes: int = span_dashboard.MAX_RESPONSE,
+    ) -> dict:
+        assert method == "GET"
+        assert timeout > 0
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(path).query)
+        limit = int(query["limit"][0])
+        start = int(query.get("cursor", ["0"])[0])
+        end = min(start + limit, self.count)
+        observation_type = "TOOL" if self.kind == "tool" else "GENERATION"
+        field = (
+            {}
+            if self.kind == "tool"
+            else {
+                "model": "synthetic-model",
+                "usageDetails": {"input": 0},
+            }
+        )
+        page = {
+            "data": [
+                observation(
+                    f"synthetic-{index}",
+                    "synthetic-tool" if self.kind == "tool" else "opencode.generation",
+                    observation_type,
+                    **field,
+                )
+                for index in range(start, end)
+            ],
+            "meta": {"cursor": str(end)} if end < self.count else {},
+        }
+        response_size = len(json.dumps(page, separators=(",", ":")).encode("utf-8"))
+        if response_size > max_response_bytes:
+            raise report.BudgetExceeded("synthetic response-byte budget exceeded")
+        self.response_bytes_received += response_size
+        self.requests += 1
+        return page
+
+
+class QueryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.start = dt.datetime(2026, 11, 19, tzinfo=dt.timezone.utc)
+        self.end = dt.datetime(2026, 11, 21, tzinfo=dt.timezone.utc)
+
+    def query(
+        self, pages: list[dict], **kwargs: object
+    ) -> tuple[agent_query.ObservationQuery, PageClient]:
+        client = PageClient(pages)
+        query = agent_query.ObservationQuery(
+            client, self.start, self.end, kind="tool", **kwargs
+        )
+        return query, client
+
+    def test_tool_and_model_search_use_pinned_server_filters(self) -> None:
+        cases = (
+            ("tool", "name", "TOOL", "shell"),
+            ("model", "model", "GENERATION", "local-model"),
+        )
+        for kind, field, observation_type, term in cases:
+            with self.subTest(kind=kind):
+                row = observation(
+                    "synthetic-row",
+                    "shell" if kind == "tool" else "opencode.generation",
+                    observation_type,
+                    model="local-model" if kind == "model" else None,
+                    input="SYNTHETIC_SECRET",
+                    output="SYNTHETIC_SECRET",
+                    statusMessage="SYNTHETIC_SECRET",
+                    metadata={"private": "SYNTHETIC_SECRET"},
+                    usageDetails={"input": 0} if kind == "model" else {},
+                )
+                client = PageClient([{"data": [row], "meta": {}}])
+                query = agent_query.ObservationQuery(
+                    client,
+                    self.start,
+                    self.end,
+                    kind=kind,
+                    search=term,
+                    page_size=17,
+                )
+                output = query.next_page_json()
+                value = json.loads(output)
+                request = urllib.parse.parse_qs(
+                    urllib.parse.urlsplit(client.requests[0]).query
+                )
+                filter_ = json.loads(request["filter"][0])
+                self.assertEqual(request["type"], [observation_type])
+                self.assertEqual(request["limit"], ["17"])
+                self.assertEqual(filter_[0]["column"], field)
+                self.assertEqual(filter_[0]["operator"], "contains")
+                self.assertEqual(filter_[0]["value"], term)
+                self.assertEqual(request["fields"], [agent_query.QUERY_FIELDS])
+                self.assertNotIn("io", request["fields"][0].split(","))
+                self.assertEqual(value["evidence_class"], "observed")
+                self.assertTrue(value["page"]["query_complete"])
+                self.assertNotIn("identifiers", value["observations"][0])
+                self.assertNotIn("SYNTHETIC_SECRET", output)
+                self.assertNotIn("observation_id", output)
+                if kind == "model":
+                    self.assertEqual(
+                        value["observations"][0]["usage_details"]["input"], 0
+                    )
+                    self.assertIsNone(
+                        value["observations"][0]["usage_details"]["output"]
+                    )
+
+    def test_empty_page_with_cursor_is_incomplete_and_cursor_stays_internal(
+        self,
+    ) -> None:
+        pages = [
+            {"data": [], "meta": {"cursor": "private-cursor-one"}},
+            {
+                "data": [observation("tool-one", "read", "TOOL")],
+                "meta": {"cursor": "private-cursor-two"},
+            },
+            {"data": [observation("tool-two", "grep", "TOOL")], "meta": {}},
+        ]
+        query, client = self.query(pages)
+        first = query.next_page_json()
+        first_page = json.loads(first)
+        self.assertEqual(first_page["observations"], [])
+        self.assertFalse(first_page["page"]["query_complete"])
+        self.assertTrue(first_page["page"]["continuation_available"])
+        self.assertNotIn("private-cursor-one", first)
+
+        second = json.loads(query.next_page_json())
+        self.assertFalse(second["page"]["query_complete"])
+        self.assertEqual(second["observations"][0]["name"], "read")
+        third = json.loads(query.next_page_json())
+        self.assertTrue(third["page"]["query_complete"])
+        self.assertFalse(third["page"]["continuation_available"])
+        self.assertEqual(len(client.requests), 3)
+        self.assertEqual(
+            urllib.parse.parse_qs(urllib.parse.urlsplit(client.requests[1]).query)[
+                "cursor"
+            ],
+            ["private-cursor-one"],
+        )
+        self.assertNotIn("private-cursor-two", json.dumps(third))
+        with self.assertRaisesRegex(ValueError, "already complete"):
+            query.next_page_json()
+
+    def test_empty_terminal_page_is_a_genuine_empty_result(self) -> None:
+        query, _ = self.query([{"data": [], "meta": {}}])
+        page = json.loads(query.next_page_json())
+        self.assertEqual(page["observations"], [])
+        self.assertEqual(page["page"]["returned"], 0)
+        self.assertTrue(page["page"]["query_complete"])
+        self.assertFalse(page["page"]["continuation_available"])
+
+    def test_identifier_detail_is_explicit(self) -> None:
+        row = observation("private-observation", "read", "TOOL")
+        query, _ = self.query([{"data": [row], "meta": {}}], include_identifiers=True)
+        value = json.loads(query.next_page_json())
+        self.assertEqual(
+            value["observations"][0]["identifiers"],
+            {
+                "observation_id": "private-observation",
+                "trace_id": "trace-synthetic",
+                "parent_observation_id": None,
+                "session_id": "session-synthetic",
+            },
+        )
+
+    def test_repeated_cursors_rows_and_page_budget_fail_closed(self) -> None:
+        with self.assertRaisesRegex(ValueError, "repeated query cursor"):
+            query, _ = self.query(
+                [
+                    {"data": [], "meta": {"cursor": "same"}},
+                    {"data": [], "meta": {"cursor": "same"}},
+                ]
+            )
+            query.next_page_json()
+            query.next_page_json()
+
+        row = observation("repeated-row", "read", "TOOL")
+        query, _ = self.query(
+            [
+                {"data": [row], "meta": {"cursor": "next"}},
+                {"data": [row], "meta": {}},
+            ]
+        )
+        query.next_page_json()
+        with self.assertRaisesRegex(ValueError, "repeated an observation"):
+            query.next_page_json()
+
+        query, _ = self.query([{"data": [], "meta": {"cursor": "next"}}], max_pages=1)
+        with self.assertRaisesRegex(report.BudgetExceeded, "page budget"):
+            query.next_page_json()
+        with self.assertRaisesRegex(ValueError, "cannot be resumed"):
+            query.next_page_json()
+
+    def test_row_response_and_output_budgets_are_explicit(self) -> None:
+        rows = [observation(f"row-{i}", "read", "TOOL") for i in range(2)]
+        query, _ = self.query([{"data": rows, "meta": {}}], page_size=1)
+        with self.assertRaisesRegex(report.BudgetExceeded, "page-row budget"):
+            query.next_page_json()
+
+        query, _ = self.query([{"data": rows, "meta": {"cursor": "next"}}], max_rows=1)
+        with self.assertRaisesRegex(report.BudgetExceeded, "row budget"):
+            query.next_page_json()
+
+        client = PageClient([{"data": [], "meta": {}}])
+        query = agent_query.ObservationQuery(
+            client,
+            self.start,
+            self.end,
+            kind="tool",
+            budget=report.ReportBudget(max_response_bytes=1),
+        )
+        with self.assertRaisesRegex(report.BudgetExceeded, "response-byte budget"):
+            query.next_page_json()
+
+        class OversizedPageClient:
+            def request(self, *args: object, **kwargs: object) -> dict:
+                raise span_dashboard.ResponseBudgetExceeded(
+                    "synthetic response-byte limit exceeded"
+                )
+
+        query = agent_query.ObservationQuery(
+            OversizedPageClient(),
+            self.start,
+            self.end,
+            kind="tool",
+        )
+        with self.assertRaisesRegex(report.BudgetExceeded, "response-byte budget"):
+            query.next_page_json()
+
+        query, _ = self.query(
+            [{"data": [observation("row", "read", "TOOL")], "meta": {}}],
+            max_page_output_bytes=100,
+        )
+        with self.assertRaisesRegex(report.BudgetExceeded, "output-byte budget"):
+            query.next_page_json()
+
+    def test_concurrent_query_budget_refuses_without_a_request(self) -> None:
+        query, client = self.query([{"data": [], "meta": {}}])
+        with (
+            common.report_query_lock(),
+            self.assertRaisesRegex(report.BudgetExceeded, "concurrency budget"),
+        ):
+            query.next_page_json()
+        self.assertEqual(client.requests, [])
+
+    def test_slow_page_and_invalid_search_fail_closed(self) -> None:
+        class Clock:
+            now = 0.0
+
+            def __call__(self) -> float:
+                return self.now
+
+        clock = Clock()
+        client = PageClient([{"data": [], "meta": {}}])
+        client.on_request = lambda: setattr(clock, "now", 121.0)
+        query = agent_query.ObservationQuery(
+            client,
+            self.start,
+            self.end,
+            kind="tool",
+            budget=report.ReportBudget(max_seconds=120, clock=clock),
+        )
+        with self.assertRaisesRegex(report.BudgetExceeded, "wall-time budget"):
+            query.next_page_json()
+
+        for kwargs, expected in (
+            ({"kind": "unknown"}, "kind"),
+            ({"kind": "tool", "search": "x" * 257}, "256 bytes"),
+            ({"kind": "tool", "page_size": 0}, "Page size"),
+        ):
+            with (
+                self.subTest(kwargs=kwargs),
+                self.assertRaisesRegex(ValueError, expected),
+            ):
+                agent_query.ObservationQuery(
+                    PageClient([]), self.start, self.end, **kwargs
+                )
+
+    def test_generated_100_10k_and_100k_query_pages_stay_bounded(self) -> None:
+        for kind in ("tool", "model"):
+            for count in (100, 10_000, 100_000):
+                with self.subTest(kind=kind, rows=count):
+                    client = GeneratedQueryClient(count, kind)
+                    query = agent_query.ObservationQuery(
+                        client, self.start, self.end, kind=kind
+                    )
+                    returned = 0
+                    pages = 0
+                    while True:
+                        page_json = query.next_page_json()
+                        page = json.loads(page_json)
+                        returned += len(page["observations"])
+                        pages += 1
+                        self.assertEqual(
+                            page["budget"]["observed"]["page_output_bytes"],
+                            len(page_json.encode("utf-8")),
+                        )
+                        self.assertLessEqual(
+                            page["budget"]["observed"]["page_output_bytes"],
+                            agent_query.MAX_PAGE_OUTPUT_BYTES,
+                        )
+                        self.assertLessEqual(
+                            page["budget"]["observed"]["response_bytes"],
+                            agent_query.MAX_QUERY_RESPONSE_BYTES,
+                        )
+                        if page["page"]["query_complete"]:
+                            break
+                    self.assertEqual(returned, count)
+                    self.assertEqual(client.requests, pages)
+                    self.assertLessEqual(pages, agent_query.MAX_QUERY_PAGES)
+                    self.assertLessEqual(returned, agent_query.MAX_QUERY_ROWS)
+                    self.assertLessEqual(
+                        query.budget.response_bytes,
+                        agent_query.MAX_QUERY_RESPONSE_BYTES,
+                    )
 
 
 if __name__ == "__main__":

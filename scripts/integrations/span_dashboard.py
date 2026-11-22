@@ -66,6 +66,10 @@ class ApiError(ValueError):
         super().__init__(f"Langfuse returned HTTP {status}.")
 
 
+class ResponseBudgetExceeded(ValueError):
+    """A Langfuse response exceeded the caller's bounded read size."""
+
+
 class Client:
     def __init__(self, base: str, auth: str) -> None:
         self.base, self.auth = base, auth
@@ -100,7 +104,7 @@ class Client:
                 raw = response.read(response_limit + 1)
             self.response_bytes_received += len(raw)
             if len(raw) > response_limit:
-                raise ValueError("Langfuse response-byte budget exceeded.")
+                raise ResponseBudgetExceeded("Langfuse response-byte budget exceeded.")
             result = json.loads(raw)
         except urllib.error.HTTPError as exc:
             raise ApiError(exc.code) from None
