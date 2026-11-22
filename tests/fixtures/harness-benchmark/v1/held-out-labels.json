@@ -1,0 +1,32 @@
+{
+  "schema_version": "aiobs.synthetic-held-out-labels.v1",
+  "fixture_pack_id": "task-evidence-synthetic",
+  "fixture_pack_version": "1.0.0",
+  "rubric_id": "task-evidence-v1",
+  "rubric_version": "1.0.0",
+  "evidence_class": "attested",
+  "label_provenance": "curated synthetic target labels; not independently validated against real work",
+  "cases": {
+    "synthetic-completed": {
+      "task_clarity": "clear",
+      "completion_evidence": "supported",
+      "validation_evidence": "pass_reported",
+      "blocker_category": "none_reported",
+      "rework_evidence": "not_indicated"
+    },
+    "synthetic-blocked": {
+      "task_clarity": "clear",
+      "completion_evidence": "not_supported",
+      "validation_evidence": "none_reported",
+      "blocker_category": "human",
+      "rework_evidence": "unknown"
+    },
+    "synthetic-unclear": {
+      "task_clarity": "unclear",
+      "completion_evidence": "not_supported",
+      "validation_evidence": "none_reported",
+      "blocker_category": "requirements",
+      "rework_evidence": "unknown"
+    }
+  }
+}

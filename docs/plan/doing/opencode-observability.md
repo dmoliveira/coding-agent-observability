@@ -77,6 +77,8 @@ Start with deterministic structural measurements; then add narrowly scoped local
 
 Default to no new real-data LLM calls and no historical backfill. A real-content evaluation must be explicitly selected and bounded by the operator, verify local model availability, local Docker connection and LM Link/network routing immediately before sending, and make the data disclosure clear; credentials and raw evidence must not appear in logs. A schedule is an explicit operator-owned opt-in, disabled by default, with non-overlap, bounded windows, idempotency keys `(source, evaluator, rubric version)`, checkpoints, retry/backoff and a dead-letter/health indicator. Do not re-run or overwrite human annotations when a model or rubric changes. Inference outage must leave data `unevaluated`, not failed/successful.
 
+The versioned synthetic fixture and paired-run protocol is specified in [`docs/specs/harness-benchmark-contract.md`](../../specs/harness-benchmark-contract.md). Its v1 artifacts separate model-facing cases from held-out labels, pin rubric/protocol/budget hashes, and define pair eligibility and experimental controls. The implementation is offline metadata validation only: it does not call `agent_evaluate.py`, invoke any model, process selected/private evidence, or claim production metric availability.
+
 ## Sequenced execution and acceptance gates
 
 Dependencies run top to bottom; a later stage may not claim data that an earlier stage does not produce.
