@@ -102,6 +102,14 @@ The separate `task_attestations` section reports counts by kind, status, validat
 
 The report never discovers such files, writes them, sends them to Langfuse or an LLM, or schedules processing. Selecting a file authorizes only that one read; the file and output remain the operator's responsibility. The existing unknown-outcome caveats remain valid for runtime observations even when attestations are supplied.
 
+### Bounded searchable query pages
+
+The internal `scripts/integrations/agent_query.py` adapter provides cursor-paginated searches over **observed** project `TOOL` rows by name and `GENERATION` rows by model, using the Langfuse v4.82.0 v2 observations API filters. It is not a configured-tool or available-model catalog. Synthetic tests verify request construction against that contract; no live API call was made and another deployed version remains unverified. Each page contains at most 100 rows, follows the source cursor order (not categorical or alphabetical), and does not report a total count. `query_complete` becomes true only when the source omits its cursor; an empty page with a cursor is still incomplete. The opaque cursor remains in the in-process query object and is not included in page JSON.
+
+Each query is bounded to 1,000 pages, 100,000 rows, 64 MiB total response data (at most 4 MiB per response), 120 seconds total wall time (at most 30 seconds per request), one active report/query page request per checkout, and 1 MiB serialized output per page. Budget exhaustion is an explicit failure, not an empty result or a completed inventory; a failed query object cannot be retried. A local timeout does not prove Langfuse canceled server-side work. Each page is serialized atomically. IDs are omitted unless explicitly requested, and the query excludes input, output, metadata and status messages. Names, timestamps, usage and optional IDs can still be sensitive.
+
+This adapter is a backend building block only: there is no HTTP endpoint, browser viewer, authorization layer, HTML renderer, or public-site integration. Do not expose it over a network or treat its local cursor state as a viewer security boundary. Those choices require the separate private-view feasibility and threat-review work. Langfuse data can be delayed, in flight, dropped or unexported; reaching the current cursor end does not prove source completeness.
+
 ## Metric contract
 
 The normative metric schema, identity/outcome rules, cohort/statistical rules and atomic component registry live in `docs/specs/harness-metric-contracts.md` and `docs/specs/harness-metric-contracts.json`. The registry preserves all 82 family IDs and owners as 268 single-unit components. `planned` components are not collected or validated merely because they appear in the registry; existing pre-v1.1 outputs are marked `implemented` with legacy conformance, not as v1.2-validated. Check each component's source readiness and delivery evidence before making dashboard claims.

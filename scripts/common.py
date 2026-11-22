@@ -39,6 +39,10 @@ CONFIG_KEYS = {
 }
 
 
+class ReportQueryBusy(ValueError):
+    """Another report/query currently owns this checkout's read slot."""
+
+
 @contextmanager
 def maintenance_lock() -> Iterator[None]:
     """Serialize this checkout's state-changing stack, sharing and backup commands."""
@@ -78,7 +82,7 @@ def report_query_lock() -> Iterator[None]:
     """Admit one structural report process per checkout without waiting."""
     global _REPORT_LOCK_FD
     if _REPORT_LOCK_FD is not None:
-        raise ValueError("Another structural report query is already running.")
+        raise ReportQueryBusy("Another structural report query is already running.")
     flags = os.O_RDWR | os.O_CREAT
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
@@ -96,7 +100,7 @@ def report_query_lock() -> Iterator[None]:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            raise ValueError(
+            raise ReportQueryBusy(
                 "Another structural report query is running in this checkout."
             ) from None
         _REPORT_LOCK_FD = fd
