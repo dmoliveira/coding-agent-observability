@@ -16,10 +16,13 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from integrations import lmstudio, span_dashboard_definition
+from integrations import judgment_calibration, lmstudio, span_dashboard_definition
 from integrations.opencode import NoRedirect
 
 RUBRIC = "task-evidence-v1"
+RUBRIC_VERSION = "1.0.0"
+SYNTHETIC_FIXTURE_PACK_ID = "task-evidence-synthetic"
+SYNTHETIC_FIXTURE_PACK_VERSION = "1.0.0"
 ENUMS = {
     "task_clarity": ("clear", "unclear", "unknown"),
     "completion_evidence": ("supported", "not_supported", "unknown"),
@@ -88,6 +91,9 @@ EXPECTED = (
         "rework_evidence": "unknown",
     },
 )
+SYNTHETIC_LABELS = {
+    case["case_id"]: labels for case, labels in zip(SYNTHETIC, EXPECTED, strict=True)
+}
 SCHEMA = {
     "type": "object",
     "properties": {
@@ -245,6 +251,21 @@ def evaluate(case: dict[str, str], model: str, token: str) -> dict[str, str]:
 
 
 def run(cases: list[dict[str, str]], model: str, source: str) -> dict[str, Any]:
+    if source == "synthetic":
+        fixture_ids = [
+            case.get("case_id") if isinstance(case, dict) else None for case in cases
+        ]
+        if (
+            not fixture_ids
+            or any(
+                not isinstance(fixture_id, str) or fixture_id not in SYNTHETIC_LABELS
+                for fixture_id in fixture_ids
+            )
+            or len(fixture_ids) != len(set(fixture_ids))
+        ):
+            raise ValueError(
+                "Synthetic calibration requires unique bundled fixture identifiers."
+            )
     token = local_model(model)
     results = []
     for case in cases:
@@ -267,17 +288,19 @@ def run(cases: list[dict[str, str]], model: str, source: str) -> dict[str, Any]:
         ],
     }
     if source == "synthetic":
-        total = len(cases) * len(ENUMS)
-        matches = sum(
-            result["assessment"][key] == expected[key]
-            for result, expected in zip(results, EXPECTED, strict=True)
-            for key in ENUMS
-        )
-        output["synthetic_comparison"] = {
-            "matched_fields": matches,
-            "total_fields": total,
-            "note": "Illustrative only; not a validated benchmark.",
+        selected_labels = {
+            case["case_id"]: SYNTHETIC_LABELS[case["case_id"]] for case in cases
         }
+        output["synthetic_comparison"] = judgment_calibration.summarize_calibration(
+            results,
+            selected_labels,
+            ENUMS,
+            model_id=model,
+            rubric_id=RUBRIC,
+            rubric_version=RUBRIC_VERSION,
+            fixture_pack_id=SYNTHETIC_FIXTURE_PACK_ID,
+            fixture_pack_version=SYNTHETIC_FIXTURE_PACK_VERSION,
+        )
     return output
 
 
