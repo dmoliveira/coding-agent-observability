@@ -4,7 +4,7 @@
 **Owner:** `task_6288`; plan `memory_411`; shared metric contract `memory_398`.
 **Fixture artifacts:** [`tests/fixtures/harness-benchmark/v1/`](../../tests/fixtures/harness-benchmark/v1/).
 
-This contract supplies a minimal deterministic starting point for independent synthetic assessment and controlled comparisons. It does not establish deployed task outcomes, model quality, production task-lifecycle capture, or population-level effectiveness. All fixture prose and run records used by tests are synthetic. The current optional `agent_evaluate.py --demo` remains a separate explicit LM Studio invocation; this contract does not run or enable it.
+This contract supplies a minimal deterministic starting point for independent synthetic assessment and controlled comparisons. It does not establish deployed task outcomes, model quality, production task-lifecycle capture, or population-level effectiveness. All fixture prose and run records used by tests are synthetic. The optional `agent_evaluate.py --demo` remains an explicit LM Studio invocation. The separate offline calibration helper (`task_6298`) summarizes returned labels against held-out synthetic targets only; it makes no model call, reports attested-reference provenance and unresolved outputs, and does not advance X6 delivery state.
 
 ## Versioned artifacts and evidence classes
 

@@ -124,18 +124,42 @@ class JudgeTests(unittest.TestCase):
         self.assertEqual(output["evidence_class"], "local_model_judgment")
         self.assertNotIn("SYNTHETIC_SECRET", json.dumps(output))
         self.assertNotIn("synthetic-token", json.dumps(output))
+        self.assertNotIn("synthetic_comparison", output)
+
+    def test_synthetic_calibration_rejects_unregistered_cases_before_model_access(
+        self,
+    ) -> None:
+        with (
+            mock.patch.object(judge, "local_model") as local_model,
+            self.assertRaisesRegex(ValueError, "bundled fixture identifiers"),
+        ):
+            judge.run([{"case_id": "unregistered"}], "test-model", "synthetic")
+        local_model.assert_not_called()
 
     def test_demo_result_includes_only_illustrative_comparison(self) -> None:
         with (
             mock.patch.object(judge, "local_model", return_value="synthetic-token"),
             mock.patch.object(judge.lmstudio, "verify_server"),
-            mock.patch.object(judge, "evaluate", side_effect=judge.EXPECTED),
+            mock.patch.object(
+                judge, "evaluate", side_effect=judge.EXPECTED
+            ) as evaluate,
             contextlib.redirect_stdout(io.StringIO()) as output,
         ):
             judge.main(["--demo"])
         result = json.loads(output.getvalue())
+        model_inputs = [call.args[0] for call in evaluate.call_args_list]
+        self.assertEqual(model_inputs, list(judge.SYNTHETIC))
+        self.assertTrue(all(set(case) == judge.CASE_FIELDS for case in model_inputs))
+        self.assertNotIn("expected_labels", json.dumps(model_inputs))
         self.assertEqual(result["synthetic_comparison"]["matched_fields"], 15)
         self.assertEqual(result["synthetic_comparison"]["total_fields"], 15)
+        self.assertEqual(
+            result["synthetic_comparison"]["reference_evidence_class"], "attested"
+        )
+        self.assertEqual(
+            result["synthetic_comparison"]["explicit_unknown_judgment_count"], 2
+        )
+        self.assertFalse(result["synthetic_comparison"]["metric_delivery_advanced"])
         self.assertNotIn("synthetic-token", output.getvalue())
 
 
