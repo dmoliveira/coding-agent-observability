@@ -195,6 +195,26 @@ class DashboardTests(unittest.TestCase):
                 latency_trend["metrics"], [{"measure": "latency", "agg": "p95"}]
             )
 
+    def test_tool_charts_disclose_project_scope_and_top_twenty_caps(self) -> None:
+        widgets = agent_dashboard_definition.definitions()["performance"]["widgets"]
+        for key in ("tool_names", "tool_errors", "tool_p50", "tool_p95"):
+            with self.subTest(widget=key):
+                widget = widgets[key]
+                self.assertEqual(widget["chartType"], "HORIZONTAL_BAR")
+                self.assertEqual(
+                    widget["chartConfig"],
+                    {"type": "HORIZONTAL_BAR", "row_limit": 20},
+                )
+                self.assertIn("Top 20", widget["description"])
+                self.assertIn("other integrations", widget["description"].lower())
+                self.assertIn(
+                    "authenticated Langfuse Observations table",
+                    widget["description"],
+                )
+                self.assertIn(agent_dashboard_definition.TOOL[0], widget["filters"])
+
+        self.assertIn("observed lower bound", widgets["tool_errors"]["description"])
+
     def test_token_mix_widgets_use_langfuse_v2_generation_measures(self) -> None:
         # Pinned to langfuse/langfuse v4.82.0, packages/shared/src/features/query/
         # dataModel.ts: viewDeclarations.v2.observations (eventsObservationsView).
@@ -463,6 +483,254 @@ class ReportTests(unittest.TestCase):
         without_ids = report.build_report(selected, self.start, self.end)
         self.assertNotIn("turn_details", without_ids)
         self.assertNotIn("session-synthetic", json.dumps(without_ids))
+
+    def test_linked_tool_long_tail_and_elapsed_latency_coverage(self) -> None:
+        base = dt.datetime(2026, 11, 20, tzinfo=dt.timezone.utc)
+
+        def iso(value: dt.datetime) -> str:
+            return value.isoformat().replace("+00:00", "Z")
+
+        rows = [
+            observation(
+                "turn",
+                "opencode.turn",
+                "AGENT",
+                isRootObservation=True,
+                startTime=iso(base),
+                endTime=iso(base + dt.timedelta(minutes=1)),
+            )
+        ]
+        for index in range(24):
+            start = base
+            end = base + dt.timedelta(seconds=index + 1)
+            overrides: dict[str, object] = {
+                "startTime": iso(start),
+                "endTime": iso(end),
+                # The source latency scalar is deliberately inconsistent: T5 is
+                # defined from the selected interval endpoints.
+                "latency": 999,
+                "level": "ERROR" if index == 0 else "DEFAULT",
+            }
+            if index == 1:
+                overrides.update(endTime=None, level=None)
+            elif index == 2:
+                overrides["startTime"] = "SYNTHETIC_INVALID_TIMESTAMP"
+            elif index == 3:
+                overrides.update(
+                    startTime=iso(base + dt.timedelta(seconds=2)),
+                    endTime=iso(base + dt.timedelta(seconds=1)),
+                )
+            rows.append(
+                observation(
+                    f"tool-{index:02d}",
+                    f"synthetic-tool-{index:02d}",
+                    "TOOL",
+                    "turn",
+                    **overrides,
+                )
+            )
+
+        rows.append(
+            observation(
+                "tool-repeat",
+                "synthetic-tool-04",
+                "TOOL",
+                "turn",
+                startTime=iso(base),
+                endTime=iso(base + dt.timedelta(seconds=10)),
+                latency=999,
+            )
+        )
+        # A project-wide TOOL observation with no observed turn ancestry is not
+        # silently attributed to the linked harness population.
+        rows.append(
+            observation(
+                "project-only",
+                "synthetic-project-only",
+                "TOOL",
+                level="ERROR",
+            )
+        )
+
+        selected = [report.select(row) for row in rows]
+        value = report.build_report(
+            selected, self.start, self.end, include_identifiers=True
+        )
+        value_v2 = report.build_report(
+            selected,
+            self.start,
+            self.end,
+            include_identifiers=True,
+            schema_version="2.0",
+        )
+        self.assertNotIn("SYNTHETIC_INVALID_TIMESTAMP", json.dumps(value))
+        linked = value["linked_tools"]
+        linked_v2 = value_v2["linked_tools"]
+        by_name = {item["name"]: item for item in linked["by_name"]}
+        by_name_v2 = {item["name"]: item for item in linked_v2["by_name"]}
+        self.assertEqual(value["schema_version"], "1.0")
+        self.assertEqual(value_v2["schema_version"], "2.0")
+        self.assertEqual(value["coverage"]["attached_tools"], 25)
+        self.assertEqual(value["coverage"]["unattached_project_tools"], 1)
+        self.assertEqual(linked["observations"], 25)
+        self.assertEqual(len(by_name), 24)
+        self.assertEqual(
+            list(by_name), [f"synthetic-tool-{index:02d}" for index in range(24)]
+        )
+        self.assertNotIn("synthetic-project-only", by_name)
+        self.assertEqual(linked["marked_error"], 1)
+        self.assertEqual(linked["level_missing"], 1)
+
+        # Schema 1.0 retains the source-latency scalar's exact legacy meaning.
+        self.assertEqual(
+            set(linked["latency"]), {"unit", "reported", "missing", "p50", "p95"}
+        )
+        self.assertEqual(
+            (
+                linked["latency"]["reported"],
+                linked["latency"]["missing"],
+                linked["latency"]["p50"],
+                linked["latency"]["p95"],
+            ),
+            (25, 0, 999, 999),
+        )
+        self.assertNotIn("elapsed_latency", linked)
+        self.assertNotIn("elapsed_latency", linked["by_name"][0])
+
+        latency = linked_v2["elapsed_latency"]
+        self.assertEqual(linked_v2["latency"], linked["latency"])
+        self.assertEqual(latency["eligible"], 25)
+        self.assertEqual(latency["reported"], 22)
+        self.assertEqual(latency["missing"], 1)
+        self.assertEqual(latency["invalid"], 2)
+        self.assertEqual((latency["p50"], latency["p95"]), (13, 23))
+        self.assertEqual(latency["duration_basis"], "endTime - startTime")
+        self.assertEqual(latency["quantile_method"], "nearest-rank (ceil(p*n)-1)")
+        self.assertEqual(by_name_v2["synthetic-tool-00"]["latency"]["p50"], 999)
+        self.assertEqual(by_name_v2["synthetic-tool-00"]["elapsed_latency"]["p50"], 1)
+        self.assertEqual(by_name["synthetic-tool-01"]["latency"]["missing"], 0)
+        self.assertEqual(
+            by_name_v2["synthetic-tool-01"]["elapsed_latency"]["missing"], 1
+        )
+        self.assertEqual(
+            by_name_v2["synthetic-tool-02"]["elapsed_latency"]["invalid"], 1
+        )
+        self.assertEqual(
+            by_name_v2["synthetic-tool-03"]["elapsed_latency"]["invalid"], 1
+        )
+        self.assertEqual(
+            (
+                by_name_v2["synthetic-tool-04"]["elapsed_latency"]["p50"],
+                by_name_v2["synthetic-tool-04"]["elapsed_latency"]["p95"],
+            ),
+            (5, 10),
+        )
+
+        timeline_v1 = {
+            item["observation_id"]: item
+            for item in value["turn_details"][0]["timeline"]
+        }
+        self.assertEqual(timeline_v1["tool-00"]["latency_seconds"], 999)
+        self.assertNotIn("elapsed_latency_status", timeline_v1["tool-00"])
+        timeline = {
+            item["observation_id"]: item
+            for item in value_v2["turn_details"][0]["timeline"]
+        }
+        self.assertEqual(timeline["tool-00"]["latency_seconds"], 999)
+        self.assertEqual(timeline["tool-00"]["elapsed_latency_status"], "reported")
+        self.assertEqual(timeline["tool-00"]["elapsed_latency_seconds"], 1)
+        self.assertEqual(timeline["tool-01"]["elapsed_latency_status"], "missing")
+        self.assertEqual(timeline["tool-02"]["elapsed_latency_status"], "invalid")
+
+    def test_invalid_tool_timestamp_precedes_a_missing_endpoint(self) -> None:
+        rows = [
+            report.select(
+                observation("turn", "opencode.turn", "AGENT", isRootObservation=True)
+            ),
+            report.select(
+                observation(
+                    "invalid-string",
+                    "synthetic-tool",
+                    "TOOL",
+                    "turn",
+                    startTime="SYNTHETIC_INVALID_TIMESTAMP",
+                    endTime=None,
+                )
+            ),
+            report.select(
+                observation(
+                    "invalid-type",
+                    "synthetic-tool",
+                    "TOOL",
+                    "turn",
+                    startTime={"value": "SYNTHETIC_PRIVATE"},
+                    endTime=None,
+                )
+            ),
+            report.select(
+                observation(
+                    "overflow-timezone",
+                    "synthetic-tool",
+                    "TOOL",
+                    "turn",
+                    startTime="0001-01-01T00:00:00+23:59",
+                    endTime="2026-11-20T00:00:01Z",
+                )
+            ),
+            report.select(
+                observation(
+                    "missing-only",
+                    "synthetic-tool",
+                    "TOOL",
+                    "turn",
+                    endTime=None,
+                )
+            ),
+        ]
+
+        value = report.build_report(
+            rows,
+            self.start,
+            self.end,
+            include_identifiers=True,
+            schema_version="2.0",
+        )
+        latency = value["linked_tools"]["elapsed_latency"]
+        self.assertEqual(latency["eligible"], 4)
+        self.assertEqual(latency["reported"], 0)
+        self.assertEqual(latency["missing"], 1)
+        self.assertEqual(latency["invalid"], 3)
+        self.assertIsNone(latency["p50"])
+        serialized = json.dumps(value)
+        self.assertNotIn("SYNTHETIC_INVALID_TIMESTAMP", serialized)
+        self.assertNotIn("0001-01-01", serialized)
+        timeline = {
+            item["observation_id"]: item
+            for item in value["turn_details"][0]["timeline"]
+        }
+        self.assertEqual(
+            timeline["overflow-timezone"]["elapsed_latency_status"], "invalid"
+        )
+        self.assertIsNone(timeline["overflow-timezone"]["start_time"])
+        with self.assertRaisesRegex(ValueError, "timezone"):
+            report.timestamp("0001-01-01T00:00:00+23:59")
+
+    def test_linked_tool_name_budget_fails_instead_of_truncating(self) -> None:
+        rows = [
+            report.select(
+                observation("turn", "opencode.turn", "AGENT", isRootObservation=True)
+            )
+        ]
+        rows.extend(
+            report.select(
+                observation(f"tool-{index}", f"synthetic-tool-{index}", "TOOL", "turn")
+            )
+            for index in range(report.MAX_GROUPS_PER_BREAKDOWN + 1)
+        )
+        with self.assertRaisesRegex(
+            report.BudgetExceeded, "cardinality budget exceeded"
+        ):
+            report.build_report(rows, self.start, self.end)
 
     def test_token_usage_separates_reported_missing_and_excluded_values(self) -> None:
         selected = report.select(
@@ -861,6 +1129,28 @@ class ReportTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "changed during the scan") as raised:
             report.fetch_observations(client, self.start, self.end, 10)
         self.assertNotIn("SYNTHETIC_INVALID", str(raised.exception))
+
+    def test_changed_invalid_tool_interval_is_not_miscounted_as_duplicate(self) -> None:
+        row = observation(
+            "tool",
+            "synthetic-tool",
+            "TOOL",
+            startTime={"value": "SYNTHETIC_PRIVATE_FIRST"},
+        )
+        changed = {
+            **row,
+            "startTime": {"value": "SYNTHETIC_PRIVATE_SECOND"},
+        }
+        client = PageClient(
+            [
+                {"data": [row], "meta": {"cursor": "next"}},
+                {"data": [changed], "meta": {}},
+            ]
+        )
+
+        with self.assertRaisesRegex(ValueError, "changed during the scan") as raised:
+            report.fetch_observations(client, self.start, self.end, 10)
+        self.assertNotIn("SYNTHETIC_PRIVATE", str(raised.exception))
 
     def test_conflicting_duplicate_cycle_and_truncation_fail_closed(self) -> None:
         row = observation("turn", "opencode.turn", "AGENT")

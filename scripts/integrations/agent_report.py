@@ -158,11 +158,25 @@ def enforce_wall_time_budget(budget: ReportBudget):
 def timestamp(value: str) -> dt.datetime:
     try:
         result = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except (ValueError, AttributeError):
+    except (ValueError, AttributeError, OverflowError):
         raise ValueError("Timestamps must be ISO 8601 with a timezone.") from None
     if result.tzinfo is None or result.utcoffset() is None:
         raise ValueError("Timestamps must include a timezone.")
-    return result.astimezone(UTC)
+    try:
+        return result.astimezone(UTC)
+    except OverflowError:
+        raise ValueError("Timestamps must be ISO 8601 with a timezone.") from None
+
+
+def safe_timestamp_value(value: Any) -> str | None:
+    """Only expose valid timestamp strings in optional identifier details."""
+    if not isinstance(value, str) or len(value) > 512:
+        return None
+    try:
+        timestamp(value)
+    except ValueError:
+        return None
+    return value
 
 
 def scalar_number(value: Any) -> float | int | None:
@@ -179,6 +193,10 @@ def select(row: Any) -> dict[str, Any]:
     if not isinstance(row, dict):
         raise ValueError("Langfuse returned an invalid observation.")  # noqa: TRY004
     selected = {key: row.get(key) for key in SELECTED}
+    selected["_tool_interval_invalid"] = row.get("type") == "TOOL" and any(
+        value is not None and (not isinstance(value, str) or len(value) > 512)
+        for value in (row.get("startTime"), row.get("endTime"))
+    )
     for key in ("id", "traceId"):
         if (
             not isinstance(selected[key], str)
@@ -256,6 +274,34 @@ def invalid_usage_fingerprint(usage: Any, key: bytes) -> bytes:
     return hmac.new(key, encoded, "sha256").digest()
 
 
+def invalid_observation_fingerprint(row: dict[str, Any], key: bytes) -> bytes:
+    """Compare rejected metric inputs without retaining or emitting their values."""
+    usage = invalid_usage_fingerprint(row.get("usageDetails"), key)
+    interval_values = {}
+    if row.get("type") == "TOOL":
+        interval_values = {
+            field: row[field]
+            for field in ("startTime", "endTime")
+            if field in row
+            and row[field] is not None
+            and (not isinstance(row[field], str) or len(row[field]) > 512)
+        }
+    if not interval_values:
+        return usage + b"\0"
+    try:
+        encoded = json.dumps(
+            interval_values,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=True,
+        ).encode("utf-8")
+    except (TypeError, ValueError, OverflowError, RecursionError):
+        raise ValueError(
+            "Langfuse returned tool timestamps that cannot be compared safely."
+        ) from None
+    return usage + b"\0" + hmac.new(key, encoded, "sha256").digest()
+
+
 def fetch_observations(
     client: span_dashboard.Client,
     start: dt.datetime,
@@ -321,9 +367,7 @@ def fetch_observations(
         for item in rows:
             row = select(item)
             key = (row["traceId"], row["id"])
-            fingerprint = invalid_usage_fingerprint(
-                item.get("usageDetails"), fingerprint_key
-            )
+            fingerprint = invalid_observation_fingerprint(item, fingerprint_key)
             if key in result:
                 if result[key] != row or duplicate_fingerprints[key] != fingerprint:
                     raise ValueError(
@@ -384,6 +428,50 @@ def percentile(values: list[float | int], p: float) -> float | int | None:
         return None
     ordered = sorted(values)
     return ordered[math.ceil(p * len(ordered)) - 1]
+
+
+def tool_elapsed_duration(row: dict[str, Any]) -> tuple[str, float | None]:
+    """Use only valid, ordered source endpoints for the T5 tool duration."""
+    if row.get("_tool_interval_invalid") is True:
+        return "invalid", None
+    start_value, end_value = row.get("startTime"), row.get("endTime")
+    endpoints = []
+    for value in (start_value, end_value):
+        if value is None:
+            endpoints.append(None)
+            continue
+        try:
+            endpoints.append(timestamp(value))
+        except ValueError:
+            return "invalid", None
+    if start_value is None or end_value is None:
+        return "missing", None
+    start, end = endpoints
+    assert start is not None and end is not None
+    if end < start:
+        return "invalid", None
+    return "reported", (end - start).total_seconds()
+
+
+def tool_latency_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    values = []
+    outcomes: Counter[str] = Counter()
+    for row in rows:
+        status, duration = tool_elapsed_duration(row)
+        outcomes[status] += 1
+        if status == "reported" and duration is not None:
+            values.append(duration)
+    return {
+        "unit": "seconds",
+        "eligible": len(rows),
+        "reported": outcomes["reported"],
+        "missing": outcomes["missing"],
+        "invalid": outcomes["invalid"],
+        "p50": percentile(values, 0.5),
+        "p95": percentile(values, 0.95),
+        "duration_basis": "endTime - startTime",
+        "quantile_method": "nearest-rank (ceil(p*n)-1)",
+    }
 
 
 def latency_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -591,6 +679,7 @@ def by_name(
     field: str,
     *,
     include_usage: bool = False,
+    include_tool_elapsed_latency: bool = False,
     schema_version: str = DEFAULT_REPORT_SCHEMA_VERSION,
 ) -> list[dict[str, Any]]:
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -603,6 +692,8 @@ def by_name(
             item["reported_tokens"] = usage_summary(
                 group, schema_version=schema_version
             )
+        if include_tool_elapsed_latency:
+            item["elapsed_latency"] = tool_latency_summary(group)
         result.append(item)
     return result
 
@@ -924,6 +1015,17 @@ def build_report(
             for bucket, bucket_counts in sorted(counts.items())
         ]
 
+    linked_tool_report: dict[str, Any] = {
+        **group_summary(tools),
+        "by_name": by_name(
+            tools,
+            "name",
+            include_tool_elapsed_latency=schema_version == "2.0",
+        ),
+    }
+    if schema_version == "2.0":
+        linked_tool_report["elapsed_latency"] = tool_latency_summary(tools)
+
     computed_at = dt.datetime.now(UTC)
     report: dict[str, Any] = {
         "schema_version": schema_version,
@@ -985,7 +1087,7 @@ def build_report(
                 schema_version=schema_version,
             ),
         },
-        "linked_tools": {**group_summary(tools), "by_name": by_name(tools, "name")},
+        "linked_tools": linked_tool_report,
         "linked_retry_events": len(retries),
         "runtime_events": {
             "observations": len(runtime_events),
@@ -1060,6 +1162,24 @@ def build_report(
     if include_identifiers:
         details = []
         sessions: dict[str, list[dict[str, Any]]] = defaultdict(list)
+
+        def timeline_observation(row: dict[str, Any]) -> dict[str, Any]:
+            item = {
+                "observation_id": row["id"],
+                "kind": kind(row),
+                "name": safe_name(row.get("name")),
+                "start_time": safe_timestamp_value(row.get("startTime")),
+                "end_time": safe_timestamp_value(row.get("endTime")),
+                "level": row.get("level"),
+                "latency_seconds": scalar_number(row.get("latency")),
+            }
+            if kind(row) == "tool" and schema_version == "2.0":
+                (
+                    item["elapsed_latency_status"],
+                    item["elapsed_latency_seconds"],
+                ) = tool_elapsed_duration(row)
+            return item
+
         for position, row in enumerate([*turns, *linked, *runtime_events]):
             if budget is not None and position % 256 == 0:
                 budget.check()
@@ -1077,24 +1197,13 @@ def build_report(
                     "trace_id": turn["traceId"],
                     "observation_id": turn["id"],
                     "session_id": turn.get("sessionId"),
-                    "start_time": turn.get("startTime"),
-                    "end_time": turn.get("endTime"),
+                    "start_time": safe_timestamp_value(turn.get("startTime")),
+                    "end_time": safe_timestamp_value(turn.get("endTime")),
                     "logical_root": turn.get("isRootObservation"),
                     "level": turn.get("level"),
                     "tool_sequence_candidates": patterns[(turn["traceId"], turn["id"])],
                     "observed_timing": timings[(turn["traceId"], turn["id"])],
-                    "timeline": [
-                        {
-                            "observation_id": row["id"],
-                            "kind": kind(row),
-                            "name": safe_name(row.get("name")),
-                            "start_time": row.get("startTime"),
-                            "end_time": row.get("endTime"),
-                            "latency_seconds": scalar_number(row.get("latency")),
-                            "level": row.get("level"),
-                        }
-                        for row in timeline
-                    ],
+                    "timeline": [timeline_observation(row) for row in timeline],
                     "reported_tokens": usage_summary(
                         [row for row in children if kind(row) == "generation"],
                         schema_version=schema_version,
@@ -1170,7 +1279,9 @@ def main(argv: list[str] | None = None) -> None:
         "--schema-version",
         choices=REPORT_SCHEMA_VERSIONS,
         default=DEFAULT_REPORT_SCHEMA_VERSION,
-        help="Report contract (2.0 opts in to disjoint token missing/excluded counts)",
+        help=(
+            "Report contract (2.0 opts in to disjoint token counts and tool elapsed latency)"
+        ),
     )
     parser.add_argument(
         "--include-identifiers",
